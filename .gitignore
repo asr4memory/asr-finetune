@@ -1,9 +1,19 @@
 data
+/data_example
 
-/.venv
-/venv
-/asr-finetune_VENV
+/asr-classification/
+/finetune/.ipynb_checkpoints
+/finetune/dictionary_check.ipynb
+/finetune/output/*
 
-/asr-classification/old
-/asr-classification/.ipynb_checkpoints
+__pycache__
+
+/finetune/__pycache__
+
 .idea
+
+
+/hpc_fu
+
+*.DS_Store
+

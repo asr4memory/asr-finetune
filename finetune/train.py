@@ -18,12 +18,16 @@ For a description of what each function is doing, we refer to the docstrings of 
 get_models, train_model, and get_hyperparameters needs to be adjusted.
 """
 import os
+import pdb
 from functools import partial
 import pprint
 import numpy as np
 
-from utils import  ( load_and_prepare_data_from_folders,list_of_strings,
-                    DataCollatorSpeechSeq2SeqWithPadding, save_file, steps_per_epoch, normalize)
+from utils import  ( list_of_strings, create_ray_indexloaders,
+                     save_file, steps_per_epoch )
+
+import h5py
+from utils import split_indices
 
 # laod models
 from transformers import set_seed
@@ -71,16 +75,20 @@ def parse_args():
     # requires the saving steps to be a multiple of the evaluation steps
     parser.add_argument("--eval_steps", type=int, default=1000, help="After how many steps to evaluate model")
     parser.add_argument("--eval_delay", type=int, default=0, help="Wait eval_delay steps before evaluating.")
-
+    # dataloader
+    parser.add_argument("--dataloader_num_workers", type=int, default=1, help="How many CPUs to allocate for dataloaders")
     parser.add_argument("--logging_steps", type=int, default=25, help="After how many steps to do some logging")
 
     # model settings
     parser.add_argument("--model_type", type=str, default="openai/whisper-tiny", help="Model to optimize")
     parser.add_argument("--target_language", type=str, default="german", help="Target Language")
     parser.add_argument("--return_timestamps", action="store_true", help="Return Timestemps mode for model")
+    parser.add_argument("--peft", action="store_true", help="Whether or not to do Parameter Efficient Training")
+    #https://github.com/Vaibhavs10/fast-whisper-finetuning?tab=readme-ov-file#evaluation-and-inference
 
     # Dataset settings
     parser.add_argument("--test_split", type=float, default=0.2, help="Percentage of test data.")
+    parser.add_argument("--h5", action="store_true", help="If data is in .h5 format")
 
 
     ## Hyperparameter Optimization settings for Ray Tune
@@ -91,6 +99,9 @@ def parse_args():
                         help="Helper variable to define max_t which is required for schedulers.")
     parser.add_argument("--max_concurrent_trials", type=int, default=1,
                         help="Maximum number of trials to run concurrently.")
+    parser.add_argument("--prefetch_batches", type=int, default=1,
+                        help="How many batches to prefetch data? Keep in mind: is using VRAM.")
+
 
     # tune options: https://docs.ray.io/en/latest/tune/api/doc/ray.tune.TuneConfig.html
     parser.add_argument("--num_samples", type=int, default=5, help="Number of times to sample from the hyperparameter space.")
@@ -120,7 +131,10 @@ def parse_args():
     parser.add_argument("--storage_path", type=str, default="/scratch/USER/ray_results", help="Where to store ray tune results. ")
     parser.add_argument("--resume_training", action="store_true", help="Whether or not to resume training.")
     parser.add_argument("--debug", action="store_true", help="Debug mode (more log output, additional callbacks)")
-    parser.add_argument("--path_to_data", type=str, default="../data/datasets/fzh-wde0459_03_03", help="Path to audio batch-prepared audio files if in debug mode. Otherwise: all data in datasets are loaded")
+    parser.add_argument("--path_to_data", type=str, default="../data/datasets/fzh-wde0459_03_03",
+                        help="Path to audio batch-prepared audio files if in debug mode. Otherwise: all data in datasets are loaded")
+    parser.add_argument("--dataset_name", type=str, default="eg_dataset_subset_1000.h5",
+                        help="Name of dataset")
     parser.add_argument("--random_seed", type=int, default=1337, help="Random Seed for reproducibility")
     parser.add_argument("-c", is_config_file=True, type=str, help="Config file path")
 
@@ -149,13 +163,23 @@ if __name__ == "__main__":
     set_seed(args.random_seed)
 
     # get models
-    model, feature_extractor, tokenizer, processor = get_models(args.model_type,args.target_language,return_timestamps=args.return_timestamps)
+    model, feature_extractor, tokenizer, processor = get_models(args.model_type,args.target_language,
+                                                                return_timestamps=args.return_timestamps,
+                                                                load_in_8bit=args.peft)
+
+    # Count trainable parameters
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    logger.info("Trainable Original Parameters: %s", trainable_params)
+
+    # pdb.set_trace()
 
     if args.run_on_local_machine:
+        args.storage_path = "./output"
         ray.init()
     else:
         ray.init("auto")
- # ray.init("auto")
+
     # Could help to connect to head note if connection fails frequently
     #     ip_head = os.getenv("ip_head")
     #     if not ip_head:
@@ -166,13 +190,51 @@ if __name__ == "__main__":
     logger.info("Ray Nodes info: %s", ray.nodes())
     logger.info("Ray Cluster Resources: %s", ray.cluster_resources())
 
-    path_to_data = args.path_to_data if args.debug else r"../data/datasets"
-    dataset_dict, len_train_set = load_and_prepare_data_from_folders(path_to_data, feature_extractor, tokenizer,
-                                                                     test_size=args.test_split, seed=args.random_seed,
-                                                                     evaluate = False, debug = args.debug)
+    path_to_data = args.path_to_data #if args.debug else r"../data/datasets"
+    # data_collator_ = DataCollatorSpeechSeq2SeqWithPadding(
+    #     processor=processor,
+    #     decoder_start_token_id=model.config.decoder_start_token_id,
+    # )
+    if args.h5:
+        h5_path = os.path.join(path_to_data, args.dataset_name) #"eg_dataset_complete_5sec.h5")
 
-    logger.debug("Starting finetuning with arguments %s", args)
-    logger.info('len_train_set: %s',len_train_set)
+        # Load dataset size
+        with h5py.File(h5_path, "r") as f:
+            dataset_size = len(f["audio_waveforms"])
+
+        logger.info("Dataset size: %s", dataset_size)
+
+        # Generate shuffled indices for train, validation, and test splits
+        # Important: Keep Random seed so that test set stays constant and results are compareable
+        split_dict = split_indices(dataset_size, train_ratio=0.8, val_ratio=0.1, seed=args.random_seed)
+        len_train_set = len(split_dict["train"])    #(we need to know that for determining the number
+                                                    # of update steps for the scheduler)
+
+        # Hack: Ray Tune requires a ray dataset object. However, converting log-mel spectogram formatare not supported
+        # So we create a index ray dataset and the actual data-fetching is Wrapped in the
+        train_loader, val_loader, test_loader = create_ray_indexloaders(split_dict) #,num_parallel_tasks=1) #args.cpus_per_trial)
+
+        ray_datasets = {
+            "train": train_loader,
+            "validation": val_loader,
+        }
+
+        from utils import SimpleStreamingCollator
+
+        # Create the parallel collator with 4 reader processes
+        data_collator = SimpleStreamingCollator(
+            h5_path,
+            processor,
+            feature_extractor,
+            tokenizer,
+            num_workers=args.cpus_per_trial -1  # Adjust based on available CPUs
+        )
+
+    else:
+        logger.info('This scripts only works with .h5 data!')
+
+    logger.info('len_train_set: %s', len_train_set)
+
     args.len_train_set = len_train_set
 
     logger.info("Starting Finetuning for model %s", args.model_type)
@@ -186,17 +248,6 @@ if __name__ == "__main__":
 
     # get the relevant hyperparameter config and training kwargs (necessary for finetuning with ray)
     training_kwargs = make_training_kwargs(args)
-
-    # Data Collator Instance
-    data_collator = DataCollatorSpeechSeq2SeqWithPadding(
-        processor=processor,
-        decoder_start_token_id=model.config.decoder_start_token_id,
-    )
-
-    ray_datasets = {
-        "train": ray.data.from_huggingface(dataset_dict["train"]),
-        "validation": ray.data.from_huggingface(dataset_dict["validation"]),
-    }
 
     """STEP 2: Define the Ray Trainer
    
@@ -348,7 +399,7 @@ if __name__ == "__main__":
     """
 
     def get_hyperparameters(args):
-        HYPERPARAMETERS = ['learning_rate', 'warmup_steps', 'weight_decay']
+        HYPERPARAMETERS = ['learning_rate', 'warmup_steps', 'weight_decay', 'scheduler']
         train_loop_config_ = {}
         train_loop_config_["per_device_train_batch_size"] = args.per_device_train_batch_size
         train_loop_config_["warmup_steps"] = 0
@@ -363,6 +414,15 @@ if __name__ == "__main__":
                 train_loop_config_[hyper_param] = tune.randint(0, args.max_warmup_steps + 1)
             elif hyper_param == "weight_decay":
                 train_loop_config_[hyper_param] = tune.uniform(0.0, 0.2)
+            elif hyper_param == "scheduler":
+                # Options: add more if you want!
+                # LINEAR = "linear"
+                # COSINE = "cosine"
+                # COSINE_WITH_RESTARTS = "cosine_with_restarts"
+                # POLYNOMIAL = "polynomial"
+                # CONSTANT = "constant"
+                # CONSTANT_WITH_WARMUP = "constant_with_warmup"
+                train_loop_config_[hyper_param] = tune.choice(["linear","cosine"])
 
         return train_loop_config_
 

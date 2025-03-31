@@ -1,5 +1,6 @@
 """Collection of different trainers and corresponding training Arguments.
 """
+import os
 
 from utils import  steps_per_epoch, normalize
 import evaluate
@@ -16,6 +17,7 @@ from ray.train.huggingface.transformers import prepare_trainer, RayTrainReportCa
 
 # get models
 from models import get_whisper_models as get_models
+# from peft import LoraConfig, prepare_model_for_kbit_training, PeftModel, LoraModel, LoraConfig, get_peft_model
 
 
 # only those hyperparameter which should be optimized
@@ -53,9 +55,38 @@ def make_seq2seq_training_kwargs(args):
         "model_type": args.model_type,
         "target_language": args.target_language,
         "return_timestamps": args.return_timestamps,
+        "prefetch_batches": args.prefetch_batches,
+        "remove_unused_columns": True if args.peft else False,
+        "label_names": ["labels"] if args.peft else None,
+        "peft": args.peft,
+        "dataloader_num_workers": args.dataloader_num_workers,
         # "torch_empty_cache_steps": 1, # This can help avoid CUDA out-of-memory errors by lowering peak VRAM usage at a cost of about 10% slower performance.
     }
     return training_kwargs
+
+from transformers import Seq2SeqTrainer, TrainerCallback, TrainingArguments, TrainerState, TrainerControl
+from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
+
+# This callback helps to save only the adapter weights and remove the base model weights.
+class SavePeftModelCallback(TrainerCallback):
+    def on_save(
+        self,
+        args: TrainingArguments,
+        state: TrainerState,
+        control: TrainerControl,
+        **kwargs,
+    ):
+        checkpoint_folder = os.path.join(args.output_dir, f"{PREFIX_CHECKPOINT_DIR}-{state.global_step}")
+
+        peft_model_path = os.path.join(checkpoint_folder, "adapter_model")
+        kwargs["model"].save_pretrained(peft_model_path)
+
+        pytorch_model_path = os.path.join(checkpoint_folder, "pytorch_model.bin")
+        if os.path.exists(pytorch_model_path):
+            os.remove(pytorch_model_path)
+        return control
+
+
 def train_whisper_model(config, training_kwargs=None, data_collator=None):
     """Main training function for one specific Hyper Parameter configuration.
 
@@ -83,7 +114,22 @@ def train_whisper_model(config, training_kwargs=None, data_collator=None):
        training_kwargs (dict): Dictionary of training arguments for the Hugging Face Seq2SeqTrainer
     """
     # get models
-    model, feature_extractor, tokenizer, processor = get_models(training_kwargs["model_type"],training_kwargs["target_language"],return_timestamps=training_kwargs["return_timestamps"])
+    model, feature_extractor, tokenizer, processor = get_models(training_kwargs["model_type"],
+                                                                training_kwargs["target_language"],
+                                                                return_timestamps=training_kwargs["return_timestamps"])
+
+    if training_kwargs["peft"]:
+        model = prepare_model_for_kbit_training(model) #, output_embedding_layer_name="proj_out")
+
+        def make_inputs_require_grad(module, input, output):
+            output.requires_grad_(True)
+
+        model.model.encoder.conv1.register_forward_hook(make_inputs_require_grad)
+
+        lora_config = LoraConfig(r=32, lora_alpha=64, target_modules=["q_proj", "v_proj"], lora_dropout=0.05, bias="none")
+        model = get_peft_model(model, lora_config)
+        model.print_trainable_parameters()
+
     del training_kwargs["model_type"]
     del training_kwargs["target_language"]
     del training_kwargs["return_timestamps"]
@@ -106,6 +152,16 @@ def train_whisper_model(config, training_kwargs=None, data_collator=None):
         pred_ids = pred.predictions
         label_ids = pred.label_ids
 
+        # # Check and fix nesting structure if needed
+        # if isinstance(pred_ids[0], list):
+        #     # If predictions are nested lists, take the first item
+        #     # This is common when using beam search or similar techniques
+        #     pred_ids = [p[0] if isinstance(p, list) else p for p in pred_ids]
+        #
+        # # Do the same for labels if needed
+        # if isinstance(label_ids[0], list):
+        #     label_ids = [l[0] if isinstance(l, list) else l for l in label_ids]
+
         # replace -100 with the pad_token_id
         label_ids[label_ids == -100] = tokenizer.pad_token_id
 
@@ -125,28 +181,71 @@ def train_whisper_model(config, training_kwargs=None, data_collator=None):
         """Identity Collator"""
         return input
 
+    # def prepare_dataset(batch):
+    #     """
+    #     Prepares a batch of data by:
+    #     - Resampling audio to 16kHz
+    #     - Extracting log-Mel features
+    #     - Tokenizing transcriptions
+    #     """
+    #     # load and resample audio data from 48 to 16kHz
+    #     audio = batch["audio"]
+    #
+    #     # compute log-Mel input features from input audio array
+    #     batch["input_features"] = \
+    #         feature_extractor(audio["array"], sampling_rate=audio["sampling_rate"]).input_features[0]
+    #
+    #     # encode target text to label ids
+    #     batch["labels"] = tokenizer(batch["transcription"]).input_ids
+    #     return batch
+
+
     # the data collator takes our pre-processed data and prepares PyTorch tensors ready for the model.
+
     train_ds_iterable = train_ds.iter_torch_batches(
+        prefetch_batches = training_kwargs["prefetch_batches"],
         batch_size=config["per_device_train_batch_size"], collate_fn=data_collator)
 
-    eval_ds_iterable = eval_ds.iter_torch_batches(batch_size=config["per_device_train_batch_size"], collate_fn=data_collator)
+    eval_ds_iterable = eval_ds.iter_torch_batches(
+        prefetch_batches = training_kwargs["prefetch_batches"],
+        batch_size=config["per_device_train_batch_size"], collate_fn=data_collator)
+    #
+    # from utils import RayIterableDataset
+
+    # train_ds_iterable = RayIterableDataset(train_ds)
+    # eval_ds_iterable = RayIterableDataset(eval_ds)
+
+    # eval_ds_iterable = iter(eval_ds,batch_size=config["per_device_train_batch_size"],
+    #                          shuffle = True)
 
     training_kwargs["max_steps"] = steps_per_epoch(training_kwargs["len_train_set"],config["per_device_train_batch_size"]) * training_kwargs["num_train_epochs"]
 
-    del training_kwargs['len_train_set']  # we remove this as its not part of Seq2Seq
+    if training_kwargs["peft"]:
+        model.config.use_cache = False
+        callbacks_ = [SavePeftModelCallback]
+    else:
+        callbacks_ = None
+
+    del training_kwargs['len_train_set']        # we remove this as its not part of Seq2Seq
     del training_kwargs['num_train_epochs']
+    del training_kwargs['prefetch_batches']
+    del training_kwargs['peft']
 
     training_args = Seq2SeqTrainingArguments(
         gradient_checkpointing=True,
-        evaluation_strategy="steps",
+        eval_strategy="steps",
         save_strategy = "steps",
-        predict_with_generate=True,
+        predict_with_generate=True, #True if not training_kwargs["peft"] else False,
         report_to=["tensorboard"],
         load_best_model_at_end=True,
         metric_for_best_model="wer",
         greater_is_better=False,
         push_to_hub=False,
         do_eval=True,
+        # Add these optimizations
+        # dataloader_num_workers=4,  # Use more workers for dataloading
+        dataloader_pin_memory=True,  # Speed up GPU transfers
+        group_by_length=True,  # Group similar length sequences for efficiency
         **config,
         **training_kwargs,
     )
@@ -158,8 +257,10 @@ def train_whisper_model(config, training_kwargs=None, data_collator=None):
         eval_dataset=eval_ds_iterable,
         data_collator=data_collator_id,
         compute_metrics=compute_metrics,
+        callbacks = callbacks_
         # tokenizer=tokenizer,  we don't need this as we do the pre-processing before
     )
+
 
     trainer.add_callback(RayTrainReportCallback())
     trainer = prepare_trainer(trainer)

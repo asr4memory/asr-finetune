@@ -19,7 +19,7 @@ import os
 import pprint
 import pdb
 
-from utils import  load_and_prepare_data_from_folders, DataCollatorSpeechSeq2SeqWithPadding, save_file, normalize
+from utils import load_and_prepare_data_from_h5, load_and_prepare_data_from_folders, DataCollatorSpeechSeq2SeqWithPadding, save_file, normalize
 import evaluate
 import safetensors
 
@@ -82,8 +82,9 @@ def parse_args():
 
     # Dataset settings
     parser.add_argument("--test_split", type=float, default=0.2, help="Percentage of test data.")
-
+    parser.add_argument("--h5", action="store_true", help="If data is in .h5 format")
     parser.add_argument("--fp16", action="store_true", default=False, help="Training with floating point 16 ")
+    parser.add_argument("--peft", action="store_true", help="Whether or not to do Parameter Efficient Training")
 
     # Other settings
     parser.add_argument("--run_on_local_machine", action="store_true", help="Store true if training is on local machine.")
@@ -146,15 +147,26 @@ def eval_model(args, eval_dict, data_collator=None):
     logger.info('Device %s detected.', device)
 
     # get models
-    model, feature_extractor, tokenizer, processor = get_models(args.model_type,args.target_language,return_timestamps=args.return_timestamps)
+    model, feature_extractor, tokenizer, processor = get_models(args.model_type,args.target_language,
+                                                                return_timestamps=args.return_timestamps,
+                                                                load_in_8bit=args.peft)
+
+
 
     # Load the state dictionary from the checkpoint
     if len(args.model_ckpt_path)>0:
-        state_dict = safetensors.torch.load_file(os.path.join(args.model_ckpt_path, 'model.safetensors'))
-        # Fix missing proj_out weights: https://github.com/openai/whisper/discussions/2302
-        model.load_state_dict(state_dict, strict=False)
-        model.proj_out = make_linear_from_emb(model.model.decoder.embed_tokens)
-        logger.info('Whisper model from checkpoint %s loaded.', args.model_ckpt_path)
+
+        if args.peft:
+        #     from peft import PeftModel, PeftConfig
+        #     model = PeftModel.from_pretrained(model, args.model_ckpt_path)
+        #     model.config.use_cache = True
+        # else:
+            state_dict = safetensors.torch.load_file(os.path.join(args.model_ckpt_path, 'model.safetensors'))
+            # Fix missing proj_out weights: https://github.com/openai/whisper/discussions/2302
+            model.load_state_dict(state_dict, strict=False)
+            model.proj_out = make_linear_from_emb(model.model.decoder.embed_tokens)
+            model.config.use_cache = True
+            logger.info('Whisper model from checkpoint %s loaded.', args.model_ckpt_path)
     else:
         logger.info('Whisper model %s loaded.', args.model_type)
 
@@ -231,11 +243,29 @@ if __name__ == "__main__":
     model, feature_extractor, tokenizer, processor = get_models(args.model_type,args.target_language,return_timestamps=args.return_timestamps)
 
     path_to_data = args.path_to_data if args.debug else r"../data/datasets"
-    dataset_dict, len_eval_set = load_and_prepare_data_from_folders(path_to_data, feature_extractor, tokenizer,
+
+    if args.h5:
+        # Create a Hugging Face dataset from generator
+        from datasets import Dataset, DatasetDict
+        from utils import h5_generator
+
+
+        # dataset_dict = DatasetDict({
+        #     "train": Dataset.from_generator(lambda: h5_generator(path_to_data,split="train",batch_size=1000,seed=args.random_seed)),
+        #     "validation": Dataset.from_generator(lambda: h5_generator(path_to_data,split="validation",batch_size=1000,seed=args.random_seed)),
+        # })
+        dataset_dict, len_eval_set = load_and_prepare_data_from_h5(path_to_data,feature_extractor,tokenizer,
+                                                                    debug = args.debug,
+                                                                    evaluate=True,
+                                                                    seed=args.random_seed)
+
+    else:
+        dataset_dict, len_eval_set = load_and_prepare_data_from_folders(path_to_data, feature_extractor, tokenizer,
                                                                      test_size=args.test_split, seed=args.random_seed,
                                                                      evaluate = True, debug = args.debug)
 
-    ray.init('auto')
+    if not args.run_on_local_machine:
+        ray.init('auto')
 
     logger.info('len_eval_set: %s',len_eval_set)
 
