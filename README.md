@@ -10,8 +10,8 @@ So you need to ssh in ```USERNAME@blogin2.nhr.zib.de``` for example, [see here](
    For example, ```module load anaconda3/2023.09``` and then 
    - `conda create -n "finetune" python=3.12.7`  change "finetune" to your environment name of choice
      (if you change the conda environment name, you need to change it in the `.sh` scripts as well!)
-   - navigate into the asr-finetune-main folder and `pip install -r requirements.txt`
-4. Install sondfile from anaconda: `conda install -c conda-forge libsndfile`
+   - navigate into the asr-finetune folder and `pip install -r requirements.txt`
+4. Install soundfile from anaconda: `conda install -c conda-forge libsndfile`
 
 # Storage on Zuse-HPC
 There are 3 types of storage systems: 
@@ -50,7 +50,7 @@ submitted job with defined `output_tag` are stored in [/scratch/USERNAME/ray_res
 files are automaticall stored in [/scratch/USERNAME/tmp](/scratch/USERNAME/tmp) 
 - For runs on you local machine for debugging, see the next section.
 
-pip install -U "ray[default]"
+
 # Monitor jobs: Tensorboard and Ray Dashboard
 
 1. To track the progress of your experiments, log into you HPC account forwarding port 6007 onto you local machine through

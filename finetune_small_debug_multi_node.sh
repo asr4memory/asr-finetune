@@ -30,7 +30,7 @@ echo "num_gpus is $num_gpus"
 module load cuda/11.8
 
 module load anaconda3/2023.09
-source activate FU
+source activate finetune
 ##module load openmpi/gcc.11/4.1.4
 
 nvidia-smi
