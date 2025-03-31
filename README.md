@@ -38,6 +38,9 @@ Different to the FU-Cluster, we need to pre-download the Whisper Model. For that
    - `models--openai--whisper-large-v3`
    - `processor`
    - `tokenizer`
+3. You need to download the `WER` metric also manually. For that, `conda activate evaluate` (or whatever name you chose)
+   type `python` into the terminal, and then `import evaluate` and then `metric = evaluate.load("wer")`. This should
+   start a download of the metric. After that, stop `python` and proceed to the first job submission!
 
 This is a prelimerary solution until we have a shared project folder.
 
