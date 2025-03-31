@@ -28,6 +28,18 @@ so far). Save your data in ```/scratch/usr/$USER/data``` until we have a project
 
 In PERM, we can store fine-tuned models. 
 
+# Download the model
+Different to the FU-Cluster, we need to pre-download the Whisper Model. For that:
+
+1. Run `download_HF_model`
+2. Move the created folder to `/scratch/usr/$USER/whisper-large-v3`. In there, there should be the following folders:
+   - `feature_extractor`
+   - `model`
+   - `models--openai--whisper-large-v3`
+   - `processor`
+   - `tokenizer`
+
+This is a prelimerary solution until we have a shared project folder.
 
 # First job submission 
 
