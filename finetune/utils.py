@@ -843,6 +843,12 @@ class SimpleStreamingCollator:
         return {"input_features": input_features, "labels": labels}
 
     def __del__(self):
-        if hasattr(self, 'pool'):
-            self.pool.close()
-            self.pool.join()
+        try:
+            if hasattr(self, 'pool') and self.pool is not None:
+                try:
+                    self.pool.close()
+                    self.pool.join()
+                except Exception as e:
+                    logger.warning(f"[SimpleStreamingCollator] Error closing/joining pool: {e}")
+        except Exception as e:
+            logger.warning(f"[SimpleStreamingCollator] Unexpected error in __del__: {e}")

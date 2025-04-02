@@ -13,7 +13,7 @@
 #SBATCH --gres=gpu:A100:1 ##change num_GPU below to same number
 
 num_gpus=1
-ray stop
+#ray stop
 
 # automaticall set-up user mail
 ##scontrol update job $SLURM_JOB_ID MailUser=$USER@zedat.fu-berlin.de
