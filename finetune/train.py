@@ -163,7 +163,13 @@ if __name__ == "__main__":
     set_seed(args.random_seed)
 
     # get models
-    model, feature_extractor, tokenizer, processor = get_models(args.model_type,args.target_language,
+    if args.run_on_local_machine:
+        from models import get_whisper_models_local
+        model, feature_extractor, tokenizer, processor = get_whisper_models_local(args.model_type, args.target_language,
+                                                                    return_timestamps=args.return_timestamps,
+                                                           load_in_8bit=args.peft)
+    else:
+        model, feature_extractor, tokenizer, processor = get_models(args.model_type,args.target_language,
                                                                 return_timestamps=args.return_timestamps,
                                                                 load_in_8bit=args.peft)
 
@@ -175,7 +181,7 @@ if __name__ == "__main__":
     # pdb.set_trace()
 
     if args.run_on_local_machine:
-        args.storage_path = "./output"
+        args.storage_path = os.path.join(os.getcwd(),"output")
         ray.init()
     else:
         ray.init("auto")

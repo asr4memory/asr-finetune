@@ -60,6 +60,7 @@ def make_seq2seq_training_kwargs(args):
         "label_names": ["labels"] if args.peft else None,
         "peft": args.peft,
         "dataloader_num_workers": args.dataloader_num_workers,
+        "run_on_local_machine": args.run_on_local_machine,
         # "torch_empty_cache_steps": 1, # This can help avoid CUDA out-of-memory errors by lowering peak VRAM usage at a cost of about 10% slower performance.
     }
     return training_kwargs
@@ -114,7 +115,13 @@ def train_whisper_model(config, training_kwargs=None, data_collator=None):
        training_kwargs (dict): Dictionary of training arguments for the Hugging Face Seq2SeqTrainer
     """
     # get models
-    model, feature_extractor, tokenizer, processor = get_models(training_kwargs["model_type"],
+    if training_kwargs["run_on_local_machine"]:
+        from models import get_whisper_models_local
+        model, feature_extractor, tokenizer, processor = get_whisper_models_local(training_kwargs["model_type"],
+                                                                training_kwargs["target_language"],
+                                                                return_timestamps=training_kwargs["return_timestamps"])
+    else:
+        model, feature_extractor, tokenizer, processor = get_models(training_kwargs["model_type"],
                                                                 training_kwargs["target_language"],
                                                                 return_timestamps=training_kwargs["return_timestamps"])
 
@@ -133,7 +140,7 @@ def train_whisper_model(config, training_kwargs=None, data_collator=None):
     del training_kwargs["model_type"]
     del training_kwargs["target_language"]
     del training_kwargs["return_timestamps"]
-
+    del training_kwargs["run_on_local_machine"]
     # Define metric for evaluation
     metric = evaluate.load("wer")
     def compute_metrics(pred):
