@@ -95,4 +95,8 @@ for undertanding the tensorboard loggings)
 
 `iterations = round_up(total_Gradient_steps / save_steps)`
 
+# Parameter Efficient Finetuning (PEFT)
 
+We follow the tutorial from [here](https://github.com/Vaibhavs10/fast-whisper-finetuning).
+In short: PEFT allows to train large models on small resources as not all but only a fraction of the parameters are 
+trained. 

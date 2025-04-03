@@ -17,7 +17,7 @@ from ray.train.huggingface.transformers import prepare_trainer, RayTrainReportCa
 
 # get models
 from models import get_whisper_models as get_models
-# from peft import LoraConfig, prepare_model_for_kbit_training, PeftModel, LoraModel, LoraConfig, get_peft_model
+from peft import LoraConfig, prepare_model_for_kbit_training, PeftModel, LoraModel, LoraConfig, get_peft_model
 
 
 # only those hyperparameter which should be optimized
@@ -56,11 +56,15 @@ def make_seq2seq_training_kwargs(args):
         "target_language": args.target_language,
         "return_timestamps": args.return_timestamps,
         "prefetch_batches": args.prefetch_batches,
-        "remove_unused_columns": True if args.peft else False,
-        "label_names": ["labels"] if args.peft else None,
-        "peft": args.peft,
         "dataloader_num_workers": args.dataloader_num_workers,
         "run_on_local_machine": args.run_on_local_machine,
+        # PEFT STUFF
+        "peft": args.peft,
+        "remove_unused_columns": False if args.peft else True,
+        "label_names": ["labels"] if args.peft else None,
+        "predict_with_generate": False if args.peft else True,
+        "gradient_checkpointing": False if args.peft else True,
+        "metric_for_best_model": "eval_loss" if args.peft else "wer",
         # "torch_empty_cache_steps": 1, # This can help avoid CUDA out-of-memory errors by lowering peak VRAM usage at a cost of about 10% slower performance.
     }
     return training_kwargs
@@ -119,14 +123,18 @@ def train_whisper_model(config, training_kwargs=None, data_collator=None):
         from models import get_whisper_models_local
         model, feature_extractor, tokenizer, processor = get_whisper_models_local(training_kwargs["model_type"],
                                                                 training_kwargs["target_language"],
-                                                                return_timestamps=training_kwargs["return_timestamps"])
+                                                                return_timestamps=training_kwargs["return_timestamps"],
+                                                                     load_in_8bit=training_kwargs["peft"]
+                                                                                  )
     else:
         model, feature_extractor, tokenizer, processor = get_models(training_kwargs["model_type"],
                                                                 training_kwargs["target_language"],
-                                                                return_timestamps=training_kwargs["return_timestamps"])
+                                                                return_timestamps=training_kwargs["return_timestamps"],
+                                                                     load_in_8bit=training_kwargs["peft"])
 
     if training_kwargs["peft"]:
-        model = prepare_model_for_kbit_training(model) #, output_embedding_layer_name="proj_out")
+        model = prepare_model_for_kbit_training(model)
+        #, output_embedding_layer_name="proj_out") not needed:  https://github.com/Vaibhavs10/fast-whisper-finetuning/issues/6
 
         def make_inputs_require_grad(module, input, output):
             output.requires_grad_(True)
@@ -188,25 +196,6 @@ def train_whisper_model(config, training_kwargs=None, data_collator=None):
         """Identity Collator"""
         return input
 
-    # def prepare_dataset(batch):
-    #     """
-    #     Prepares a batch of data by:
-    #     - Resampling audio to 16kHz
-    #     - Extracting log-Mel features
-    #     - Tokenizing transcriptions
-    #     """
-    #     # load and resample audio data from 48 to 16kHz
-    #     audio = batch["audio"]
-    #
-    #     # compute log-Mel input features from input audio array
-    #     batch["input_features"] = \
-    #         feature_extractor(audio["array"], sampling_rate=audio["sampling_rate"]).input_features[0]
-    #
-    #     # encode target text to label ids
-    #     batch["labels"] = tokenizer(batch["transcription"]).input_ids
-    #     return batch
-
-
     # the data collator takes our pre-processed data and prepares PyTorch tensors ready for the model.
 
     train_ds_iterable = train_ds.iter_torch_batches(
@@ -216,20 +205,13 @@ def train_whisper_model(config, training_kwargs=None, data_collator=None):
     eval_ds_iterable = eval_ds.iter_torch_batches(
         prefetch_batches = training_kwargs["prefetch_batches"],
         batch_size=config["per_device_train_batch_size"], collate_fn=data_collator)
-    #
-    # from utils import RayIterableDataset
-
-    # train_ds_iterable = RayIterableDataset(train_ds)
-    # eval_ds_iterable = RayIterableDataset(eval_ds)
-
-    # eval_ds_iterable = iter(eval_ds,batch_size=config["per_device_train_batch_size"],
-    #                          shuffle = True)
 
     training_kwargs["max_steps"] = steps_per_epoch(training_kwargs["len_train_set"],config["per_device_train_batch_size"]) * training_kwargs["num_train_epochs"]
 
     if training_kwargs["peft"]:
         model.config.use_cache = False
         callbacks_ = [SavePeftModelCallback]
+        compute_metrics = None
     else:
         callbacks_ = None
 
@@ -239,13 +221,10 @@ def train_whisper_model(config, training_kwargs=None, data_collator=None):
     del training_kwargs['peft']
 
     training_args = Seq2SeqTrainingArguments(
-        gradient_checkpointing=True,
         eval_strategy="steps",
         save_strategy = "steps",
-        predict_with_generate=True, #True if not training_kwargs["peft"] else False,
         report_to=["tensorboard"],
         load_best_model_at_end=True,
-        metric_for_best_model="wer",
         greater_is_better=False,
         push_to_hub=False,
         do_eval=True,

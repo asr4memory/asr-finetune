@@ -212,6 +212,7 @@ if __name__ == "__main__":
 
         # Generate shuffled indices for train, validation, and test splits
         # Important: Keep Random seed so that test set stays constant and results are compareable
+        # TODO: set the right ratio before publishing
         split_dict = split_indices(dataset_size, train_ratio=0.8, val_ratio=0.1, seed=args.random_seed)
         len_train_set = len(split_dict["train"])    #(we need to know that for determining the number
                                                     # of update steps for the scheduler)
@@ -225,12 +226,11 @@ if __name__ == "__main__":
             "validation": val_loader,
         }
 
-        from utils import SimpleStreamingCollator
+        from utils import SimpleStreamingCollator,FastHDF5AudioCollator
 
         # Create the parallel collator with 4 reader processes
         data_collator = SimpleStreamingCollator(
             h5_path,
-            processor,
             feature_extractor,
             tokenizer,
             num_workers=args.cpus_per_trial -1  # Adjust based on available CPUs
@@ -240,7 +240,7 @@ if __name__ == "__main__":
         logger.info('This scripts only works with .h5 data!')
 
     logger.info('len_train_set: %s', len_train_set)
-
+    logger.info('len_validation_set: %s', len(split_dict["validation"]) )
     args.len_train_set = len_train_set
 
     logger.info("Starting Finetuning for model %s", args.model_type)
