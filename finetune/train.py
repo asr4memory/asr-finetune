@@ -206,7 +206,7 @@ if __name__ == "__main__":
 
         # Load dataset size
         with h5py.File(h5_path, "r") as f:
-            dataset_size = len(f["audio_waveforms"])
+            dataset_size = len(f["audio"])
 
         logger.info("Dataset size: %s", dataset_size)
 

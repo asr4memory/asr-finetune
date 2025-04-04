@@ -273,7 +273,7 @@ def _process_hdf5_index(hdf5_path, idx):
     try:
         with h5py.File(hdf5_path, 'r') as f:
             # Get audio with proper dtype
-            audio = np.array(f['audio_waveforms'][idx], dtype=np.float32).copy()
+            audio = np.array(f['audio'][idx], dtype=np.float32).copy()
 
             # Get transcription
             transcription = f['transcription'][idx]
@@ -506,7 +506,7 @@ class SimpleMultiprocessingCollatorFast:
         try:
             start = time.time()
             with h5py.File(hdf5_path, 'r') as f:
-                audio = np.array(f['audio_waveforms'][idx], dtype=np.float32).copy()
+                audio = np.array(f['audio'][idx], dtype=np.float32).copy()
                 transcription = f['transcription'][idx]
                 if isinstance(transcription, bytes):
                     transcription = transcription.decode('utf-8')
@@ -662,7 +662,7 @@ class SimpleMultiprocessingCollatorFast:
     def process_index_shared(idx):
         global _shared_hdf5_file
         try:
-            audio = np.array(_shared_hdf5_file['audio_waveforms'][idx], dtype=np.float32).copy()
+            audio = np.array(_shared_hdf5_file['audio'][idx], dtype=np.float32).copy()
             transcription = _shared_hdf5_file['transcription'][idx]
             if isinstance(transcription, bytes):
                 transcription = transcription.decode('utf-8')
@@ -683,7 +683,7 @@ class SimpleMultiprocessingCollatorFast:
         try:
             start = time.time()
             with h5py.File(hdf5_path, 'r') as f:
-                audio = np.array(f['audio_waveforms'][idx], dtype=np.float32).copy()
+                audio = np.array(f['audio'][idx], dtype=np.float32).copy()
                 transcription = f['transcription'][idx]
                 if isinstance(transcription, bytes):
                     transcription = transcription.decode('utf-8')
@@ -764,7 +764,7 @@ def _init_worker(hdf5_path):
 def _process_index_shared(idx):
     global _shared_hdf5
     try:
-        audio = np.array(_shared_hdf5['audio_waveforms'][idx], dtype=np.float32).copy()
+        audio = np.array(_shared_hdf5['audio'][idx], dtype=np.float32).copy()
         transcription = _shared_hdf5['transcription'][idx]
         if isinstance(transcription, bytes):
             transcription = transcription.decode('utf-8')
