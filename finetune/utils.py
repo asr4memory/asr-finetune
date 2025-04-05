@@ -89,7 +89,7 @@ def split_indices(dataset_size, train_ratio=0.8, val_ratio=0.1, seed=42):
 
     train_size = int(train_ratio * dataset_size)
     val_size = int(val_ratio * dataset_size)
-    train_size -= val_size  # adjust to avoid overlap
+    # train_size -= val_size  # adjust to avoid overlap
     # test = remaining
 
     return {
@@ -222,98 +222,3 @@ class SimpleStreamingCollator:
                     logger.warning(f"[SimpleStreamingCollator] Error closing/joining pool: {e}")
         except Exception as e:
             logger.warning(f"[SimpleStreamingCollator] Unexpected error in __del__: {e}")
-
-
-import time
-import numpy as np
-import multiprocessing.dummy as mp_dummy  # ThreadPool version
-import h5py
-import torch
-
-_shared_hdf5 = None
-_shared_featurizer = None
-
-def _init_worker(hdf5_path, feature_extractor):
-    global _shared_hdf5, _shared_featurizer
-    _shared_hdf5 = h5py.File(hdf5_path, "r", libver="latest", swmr=True)
-    _shared_featurizer = feature_extractor
-
-def _process_index_with_features(idx):
-    global _shared_hdf5, _shared_featurizer
-    try:
-        audio = np.array(_shared_hdf5['audio_waveforms'][idx], dtype=np.float32).copy()
-        transcription = _shared_hdf5['transcription'][idx]
-        if isinstance(transcription, bytes):
-            transcription = transcription.decode('utf-8')
-        features = _shared_featurizer(audio, sampling_rate=16000).input_features[0]
-        return idx, features, transcription
-    except Exception as e:
-        print(f"[ERROR] Index {idx}: {e}")
-        return idx, None, None
-
-class FastHDF5AudioCollator:
-    def __init__(self, hdf5_path, feature_extractor, tokenizer, num_workers=None):
-        self.hdf5_path = hdf5_path
-        self.feature_extractor = feature_extractor  # needed only for init inside workers
-        self.tokenizer = tokenizer
-
-        self.num_workers = num_workers or min(8, multiprocessing.cpu_count() - 1)
-        self.pool = None
-
-        self.batch_times = []
-        self.batch_count = 0
-
-    def __call__(self, batch_dict):
-        if self.pool is None:
-            self.pool = mp_dummy.Pool(
-                processes=self.num_workers,
-                initializer=_init_worker,
-                initargs=(self.hdf5_path, self.feature_extractor)
-            )
-
-        start = time.time()
-        indices = batch_dict['idx']
-
-        results = self.pool.map(_process_index_with_features, indices)
-        valid_results = [(idx, features, trans) for idx, features, trans in results if features is not None]
-
-        if not valid_results:
-            raise RuntimeError(f"No valid data in batch: {indices}")
-
-        _, input_features_list, transcription_list = zip(*valid_results)
-
-        # Pad features into tensor batch
-        padded_features = self.feature_extractor.pad(
-            [{"input_features": f} for f in input_features_list],
-            padding="longest",
-            return_tensors="pt"
-        )
-        input_features = padded_features.input_features
-
-        # Batched tokenization
-        tokenized = self.tokenizer(
-            list(transcription_list),
-            padding=True,
-            return_tensors="pt"
-        )
-        labels = tokenized["input_ids"].masked_fill(
-            tokenized.attention_mask.ne(1), -100
-        )
-
-        # Performance tracking
-        elapsed = time.time() - start
-        self.batch_times.append(elapsed)
-        self.batch_count += 1
-        if self.batch_count % 5 == 0:
-            avg_time = sum(self.batch_times[-5:]) / 5
-            print(f"[FastCollator] Batch {self.batch_count}: {avg_time:.2f}s, {len(indices)/avg_time:.2f} samples/sec")
-
-        return {"input_features": input_features, "labels": labels}
-
-    def __del__(self):
-        try:
-            if hasattr(self, 'pool') and self.pool is not None:
-                self.pool.close()
-                self.pool.join()
-        except Exception as e:
-            print(f"[FastCollator] Error closing thread pool: {e}")

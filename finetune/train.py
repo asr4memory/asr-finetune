@@ -180,7 +180,7 @@ if __name__ == "__main__":
 
     # pdb.set_trace()
 
-    if args.run_on_local_machine:
+    if args.run_on_local_machine and args.debug:
         args.storage_path = os.path.join(os.getcwd(),"output")
         ray.init()
     else:
@@ -206,7 +206,7 @@ if __name__ == "__main__":
 
         # Load dataset size
         with h5py.File(h5_path, "r") as f:
-            dataset_size = len(f["audio_waveforms"])
+            dataset_size = len(f["audio"])
 
         logger.info("Dataset size: %s", dataset_size)
 
@@ -226,7 +226,7 @@ if __name__ == "__main__":
             "validation": val_loader,
         }
 
-        from utils import SimpleStreamingCollator,FastHDF5AudioCollator
+        from utils import SimpleStreamingCollator
 
         # Create the parallel collator with 4 reader processes
         data_collator = SimpleStreamingCollator(
@@ -273,6 +273,10 @@ if __name__ == "__main__":
         partial(train_model, training_kwargs=training_kwargs,
                 data_collator=data_collator),  # the training function to execute on each worker.
         scaling_config=ScalingConfig(num_workers=args.num_workers, use_gpu=args.use_gpu, resources_per_worker = resources_per_trial, placement_strategy="SPREAD"),
+         # This is important for proper initialization
+        torch_config=ray.train.torch.TorchConfig(
+        backend="NCCL"  # Use DDP for initialization
+        ),
         datasets={
             "train": ray_datasets["train"],
             "eval": ray_datasets["validation"],

@@ -55,10 +55,10 @@ def get_whisper_models_local(model_type,target_language,return_timestamps=False,
        tokenizer (WhisperTokenizer): loaded Whiseper Tokenizer Object
        processor (WhisperProcessor): Loaded Whisper Processor Object
     """
-    feature_extractor = WhisperFeatureExtractor.from_pretrained(model_type)
+    feature_extractor = WhisperFeatureExtractor.from_pretrained(model_type,load_in_8bit=load_in_8bit)
     tokenizer = WhisperTokenizer.from_pretrained(model_type, language=target_language, task="transcribe")
     processor = WhisperProcessor.from_pretrained(model_type, language=target_language, task="transcribe")
-    model = WhisperForConditionalGeneration.from_pretrained(model_type)
+    model = WhisperForConditionalGeneration.from_pretrained(model_type, load_in_8bit=load_in_8bit)
     model.generation_config.language = target_language
     model.generation_config.task = "transcribe"
     model.generation_config.forced_decoder_ids = None
