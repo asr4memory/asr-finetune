@@ -93,7 +93,6 @@ def parse_args():
     #https://github.com/Vaibhavs10/fast-whisper-finetuning?tab=readme-ov-file#evaluation-and-inference
 
     # Dataset settings
-    parser.add_argument("--test_split", type=float, default=0.2, help="Percentage of test data.")
     parser.add_argument("--h5", action="store_true", help="If data is in .h5 format")
 
 
@@ -137,7 +136,7 @@ def parse_args():
     parser.add_argument("--storage_path", type=str, default="/scratch/USER/ray_results", help="Where to store ray tune results. ")
     parser.add_argument("--resume_training", action="store_true", help="Whether or not to resume training.")
     parser.add_argument("--debug", action="store_true", help="Debug mode (more log output, additional callbacks)")
-    parser.add_argument("--path_to_data", type=str, default="../data/datasets/fzh-wde0459_03_03",
+    parser.add_argument("--path_to_data", type=str, default=None,
                         help="Path to audio batch-prepared audio files if in debug mode. Otherwise: all data in datasets are loaded")
     parser.add_argument("--dataset_name", type=str, default="eg_dataset_subset_1000.h5",
                         help="Name of dataset")
@@ -208,11 +207,9 @@ if __name__ == "__main__":
     logger.info("Ray Nodes info: %s", ray.nodes())
     logger.info("Ray Cluster Resources: %s", ray.cluster_resources())
 
-    path_to_data = args.path_to_data #if args.debug else r"../data/datasets"
-    # data_collator_ = DataCollatorSpeechSeq2SeqWithPadding(
-    #     processor=processor,
-    #     decoder_start_token_id=model.config.decoder_start_token_id,
-    # )
+
+    path_to_data = os.path.join("/scratch/usr/", os.getenv('USER') + "/data") if args.path_to_data is None else args.path_to_data
+
     if args.h5:
         h5_path = os.path.join(path_to_data, args.dataset_name + ".h5") #"eg_dataset_complete_5sec.h5")
 
