@@ -34,6 +34,13 @@ def save_file(file,output_dir,mode='config',file_tag = ''):
         with open(eval_path, 'w') as f:
             json.dump(file, f)
 
+import psutil
+def log_memory_usage(label=""):
+    mem = psutil.virtual_memory()
+    logging.info(
+        f"MEMORY [{label}]: {mem.percent}% - Used: {mem.used / 1e9:.2f} GB, Available: {mem.available / 1e9:.2f} GB")
+
+
 #
 # def load_and_prepare_data_from_folders(path,feature_extractor,tokenizer,test_size=0.2, seed = 0, evaluate = False,
 #                                        debug = False, num_proc = 1):
@@ -248,12 +255,129 @@ def create_ray_indexloaders(
     train_indices, val_indices, test_indices = split_indices["train"], split_indices["validation"], split_indices["test"]
 
     # Create Ray datasets for each split
-    train_ds = ray.data.from_items([{"idx": i} for i in train_indices])#.repartition(num_blocks=num_parallel_tasks)
-    val_ds = ray.data.from_items([{"idx": i} for i in val_indices])#.repartition(num_blocks=num_parallel_tasks)
-    test_ds = ray.data.from_items([{"idx": i} for i in test_indices])#.repartition(num_blocks=num_parallel_tasks)
+    # train_ds = ray.data.from_items([{"idx": i} for i in train_indices])#.repartition(num_blocks=num_parallel_tasks)
+    # val_ds = ray.data.from_items([{"idx": i} for i in val_indices])#.repartition(num_blocks=num_parallel_tasks)
+    # test_ds = ray.data.from_items([{"idx": i} for i in test_indices])#.repartition(num_blocks=num_parallel_tasks)
 
     return train_ds, val_ds, test_ds
 
+
+def create_split_h5_files(original_h5_path, output_dir, train_indices=None, val_indices=None,
+                          test_indices=None, random_seed=1337, train_ratio=0.8, val_ratio=0.1):
+    """
+    Create separate H5 files for training, validation, and test sets if they don't exist already.
+
+    Parameters:
+    -----------
+    original_h5_path : str
+        Path to the original H5 file containing all data
+    output_dir : str
+        Directory where split H5 files will be saved
+    train_indices, val_indices, test_indices : list or None
+        Indices for each split. If None, will be generated using train_ratio and val_ratio
+    random_seed : int
+        Random seed for reproducibility when generating splits
+    train_ratio, val_ratio : float
+        Ratios for train and validation sets if indices are not provided
+
+    Returns:
+    --------
+    dict
+        Dictionary with paths to the split H5 files
+    """
+
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Generate file paths
+    dataset_name = os.path.basename(original_h5_path)
+    base_name = os.path.splitext(dataset_name)[0]
+
+    train_h5_path = os.path.join(output_dir, f"{base_name}_train.h5")
+    val_h5_path = os.path.join(output_dir, f"{base_name}_val.h5")
+    test_h5_path = os.path.join(output_dir, f"{base_name}_test.h5")
+
+    # Check if files already exist
+    all_files_exist = (
+            os.path.exists(train_h5_path) and
+            os.path.exists(val_h5_path) and
+            os.path.exists(test_h5_path)
+    )
+
+    if all_files_exist:
+        logger.info(f"Split H5 files already exist in {output_dir}")
+        return {
+            "train": train_h5_path,
+            "validation": val_h5_path,
+            "test": test_h5_path
+        }
+
+    logger.debug(f"Creating split H5 files in {output_dir}")
+
+    # If indices are not provided, generate them
+    if train_indices is None or val_indices is None or test_indices is None:
+        with h5py.File(original_h5_path, "r") as f:
+            dataset_size = len(f["audio"])
+
+        split_dict = split_indices(
+            dataset_size,
+            train_ratio=train_ratio,
+            val_ratio=val_ratio,
+            seed=random_seed
+        )
+
+        train_indices = split_dict["train"]
+        val_indices = split_dict["validation"]
+        test_indices = split_dict["test"]
+
+    # Create the split files
+    with h5py.File(original_h5_path, "r") as source:
+        # Get all keys (datasets) in the source file
+        keys = list(source.keys())
+
+        # Create training H5 if it doesn't exist
+        if not os.path.exists(train_h5_path):
+            logger.debug(f"Creating training H5 file: {train_h5_path}")
+            with h5py.File(train_h5_path, "w") as train_file:
+                for key in keys:
+                    # Create the same dataset in the new file
+                    train_file.create_dataset(
+                        key,
+                        data=source[key][train_indices],
+                        compression="gzip",
+                        compression_opts=4
+                    )
+
+        # Create validation H5 if it doesn't exist
+        if not os.path.exists(val_h5_path):
+            logger.debug(f"Creating validation H5 file: {val_h5_path}")
+            with h5py.File(val_h5_path, "w") as val_file:
+                for key in keys:
+                    val_file.create_dataset(
+                        key,
+                        data=source[key][val_indices],
+                        compression="gzip",
+                        compression_opts=4
+                    )
+
+        # Create test H5 if it doesn't exist
+        if not os.path.exists(test_h5_path):
+            logger.debug(f"Creating test H5 file: {test_h5_path}")
+            with h5py.File(test_h5_path, "w") as test_file:
+                for key in keys:
+                    test_file.create_dataset(
+                        key,
+                        data=source[key][test_indices],
+                        compression="gzip",
+                        compression_opts=4
+                    )
+
+    logger.info("Split H5 files created successfully")
+    return {
+        "train": train_h5_path,
+        "validation": val_h5_path,
+        "test": test_h5_path
+    }
 
 import ray
 
@@ -843,6 +967,6 @@ class SimpleStreamingCollator:
         return {"input_features": input_features, "labels": labels}
 
     def __del__(self):
-        if hasattr(self, 'pool'):
+        if hasattr(self, 'pool') and self.pool is not None:
             self.pool.close()
             self.pool.join()
