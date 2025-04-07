@@ -18,6 +18,7 @@ For a description of what each function is doing, we refer to the docstrings of 
 get_models, train_model, and get_hyperparameters needs to be adjusted.
 """
 import os
+
 import pdb
 from functools import partial
 import pprint
@@ -27,7 +28,7 @@ from utils import  ( list_of_strings, create_ray_indexloaders,
                      save_file, steps_per_epoch )
 
 import h5py
-from utils import split_indices
+from utils import split_indices, log_memory_usage
 
 # laod models
 from transformers import set_seed
@@ -46,6 +47,11 @@ from ray.tune import Tuner
 from models import get_whisper_models as get_models
 from trainers import train_whisper_model as train_model
 from trainers import make_seq2seq_training_kwargs as make_training_kwargs
+
+os.environ["RAY_AIR_NEW_OUTPUT"] = "0"
+os.environ["RAY_VERBOSITY"] = "0"
+ray.data.context.DataContext.get_current().enable_operator_progress_bars = False
+ray.data.context.DataContext.get_current().enable_progress_bars = False
 
 logger = logging.getLogger(__name__)
 
@@ -157,8 +163,12 @@ if __name__ == "__main__":
 
     # Arguments and Logger
     args = parse_args()
-    logging.basicConfig(format="%(asctime)-5.5s %(name)-20.20s %(levelname)-7.7s %(message)s", datefmt="%H:%M", level=logging.DEBUG if args.debug else logging.INFO)
+    logging.basicConfig(format="%(asctime)-5.5s %(name)-20.20s %(levelname)-7.7s %(message)s", datefmt="%H:%M", \
+                        level=logging.DEBUG if args.debug else logging.INFO,\
+                        filename=os.path.join(args.output_dir,'memory_usage.log'))
+
     logger.info("Hi!")
+
     # set random seed for reproducibility
     set_seed(args.random_seed)
 
@@ -178,13 +188,15 @@ if __name__ == "__main__":
 
     logger.info("Trainable Original Parameters: %s", trainable_params)
 
-    # pdb.set_trace()
-
-    if args.run_on_local_machine and args.debug:
+    # Initial memory usage
+    log_memory_usage("before_ray_init")
+    if args.run_on_local_machine:
         args.storage_path = os.path.join(os.getcwd(),"output")
         ray.init()
     else:
         ray.init("auto")
+
+    log_memory_usage("after_ray_init")
 
     # Could help to connect to head note if connection fails frequently
     #     ip_head = os.getenv("ip_head")
@@ -202,20 +214,46 @@ if __name__ == "__main__":
     #     decoder_start_token_id=model.config.decoder_start_token_id,
     # )
     if args.h5:
-        h5_path = os.path.join(path_to_data, args.dataset_name) #"eg_dataset_complete_5sec.h5")
+        h5_path = os.path.join(path_to_data, args.dataset_name + ".h5") #"eg_dataset_complete_5sec.h5")
 
         # Load dataset size
-        with h5py.File(h5_path, "r") as f:
-            dataset_size = len(f["audio"])
+        with h5py.File(h5_path, "r") as source:
+            dataset_size = len(source["audio"])
 
         logger.info("Dataset size: %s", dataset_size)
 
         # Generate shuffled indices for train, validation, and test splits
         # Important: Keep Random seed so that test set stays constant and results are compareable
-        # TODO: set the right ratio before publishing
         split_dict = split_indices(dataset_size, train_ratio=0.8, val_ratio=0.1, seed=args.random_seed)
         len_train_set = len(split_dict["train"])    #(we need to know that for determining the number
                                                     # of update steps for the scheduler)
+
+        # We seperate test, validation and train set
+        with (h5py.File(h5_path, "r") as source):
+            train_indices, val_indices, test_indices = split_dict["train"], split_dict["validation"], \
+                                                       split_dict["test"]
+
+            train_h5_path = os.path.join(path_to_data, args.dataset_name+"_training_"+str(args.random_seed)+".h5")
+            if not os.path.exists(train_h5_path):
+                # Create training H5
+                with h5py.File(train_h5_path, "w") as train_file:
+                    for key in source.keys():
+                        train_file.create_dataset(key, data=source[key][train_indices])
+
+            val_h5_path = os.path.join(path_to_data, args.dataset_name + "_validation_" + str(args.random_seed) + ".h5")
+            if not os.path.exists(val_h5_path):
+                # Create validation H5
+                with h5py.File(val_h5_path, "w") as val_file:
+                    for key in source.keys():
+                        val_file.create_dataset(key, data=source[key][val_indices])
+
+            test_h5_path = os.path.join(path_to_data, args.dataset_name + "_testing_" + str(args.random_seed) + ".h5")
+            if not os.path.exists(test_h5_path):
+                # Optionally create test H5
+                with h5py.File(test_h5_path, "w") as test_file:
+                    for key in source.keys():
+                        test_file.create_dataset(key, data=source[key][test_indices])
+
 
         # Hack: Ray Tune requires a ray dataset object. However, converting log-mel spectogram formatare not supported
         # So we create a index ray dataset and the actual data-fetching is Wrapped in the
@@ -229,18 +267,18 @@ if __name__ == "__main__":
         from utils import SimpleStreamingCollator
 
         # Create the parallel collator with 4 reader processes
-        data_collator = SimpleStreamingCollator(
-            h5_path,
-            feature_extractor,
-            tokenizer,
-            num_workers=args.cpus_per_trial -1  # Adjust based on available CPUs
-        )
+        data_collators = {"training": SimpleStreamingCollator(train_h5_path,processor,feature_extractor,tokenizer,
+                                                              num_workers=args.cpus_per_trial -1),
+                          "validation": SimpleStreamingCollator(val_h5_path,processor,feature_extractor,tokenizer,
+                                                              num_workers=args.cpus_per_trial -1)
+                          }
+
 
     else:
         logger.info('This scripts only works with .h5 data!')
 
     logger.info('len_train_set: %s', len_train_set)
-    logger.info('len_validation_set: %s', len(split_dict["validation"]) )
+
     args.len_train_set = len_train_set
 
     logger.info("Starting Finetuning for model %s", args.model_type)
@@ -271,7 +309,7 @@ if __name__ == "__main__":
     resources_per_trial={"CPU": args.cpus_per_trial, "GPU": args.gpus_per_trial}
     trainer = TorchTrainer(
         partial(train_model, training_kwargs=training_kwargs,
-                data_collator=data_collator),  # the training function to execute on each worker.
+                data_collators=data_collators),  # the training function to execute on each worker.
         scaling_config=ScalingConfig(num_workers=args.num_workers, use_gpu=args.use_gpu, resources_per_worker = resources_per_trial, placement_strategy="SPREAD"),
          # This is important for proper initialization
         torch_config=ray.train.torch.TorchConfig(

@@ -35,6 +35,12 @@ def save_file(file,output_dir,mode='config',file_tag = ''):
         with open(eval_path, 'w') as f:
             json.dump(file, f)
 
+import psutil
+def log_memory_usage(label=""):
+    mem = psutil.virtual_memory()
+    logging.info(
+        f"MEMORY [{label}]: {mem.percent}% - Used: {mem.used / 1e9:.2f} GB, Available: {mem.available / 1e9:.2f} GB")
+
 
 def normalize(text):
     """
@@ -85,12 +91,13 @@ def list_of_strings(arg):
 def split_indices(dataset_size, train_ratio=0.8, val_ratio=0.1, seed=42):
     """Generate shuffled indices for dataset splitting."""
     np.random.seed(seed)
+
     indices = np.random.permutation(dataset_size)
 
     train_size = int(train_ratio * dataset_size)
-    val_size = int(val_ratio * dataset_size)
-    # train_size -= val_size  # adjust to avoid overlap
-    # test = remaining
+    test_size = dataset_size - train_size
+    val_size = int(val_ratio * train_size)
+    train_size -= val_size  # Adjust train size after validation split
 
     return {
         "train": np.sort(indices[:train_size]),
@@ -111,10 +118,13 @@ def create_ray_indexloaders(
     train_indices, val_indices, test_indices = split_indices["train"], split_indices["validation"], split_indices["test"]
 
     # Create Ray datasets for each split
-    train_ds = ray.data.from_items([{"idx": i} for i in train_indices])#.repartition(num_blocks=num_parallel_tasks)
-    val_ds = ray.data.from_items([{"idx": i} for i in val_indices])#.repartition(num_blocks=num_parallel_tasks)
-    test_ds = ray.data.from_items([{"idx": i} for i in test_indices])#.repartition(num_blocks=num_parallel_tasks)
+    # train_ds = ray.data.from_items([{"idx": i} for i in train_indices])#.repartition(num_blocks=num_parallel_tasks)
+    # val_ds = ray.data.from_items([{"idx": i} for i in val_indices])#.repartition(num_blocks=num_parallel_tasks)
+    # test_ds = ray.data.from_items([{"idx": i} for i in test_indices])#.repartition(num_blocks=num_parallel_tasks)
 
+    train_ds = ray.data.from_items([{"idx": i} for i in range(len(train_indices))])
+    val_ds = ray.data.from_items([{"idx": i} for i in range(len(train_indices))])
+    test_ds = ray.data.from_items([{"idx": i} for i in range(len(train_indices))])
     return train_ds, val_ds, test_ds
 
 

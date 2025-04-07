@@ -6,6 +6,9 @@ data
 /finetune/dictionary_check.ipynb
 /finetune/output/*
 
+/finetune/configs/tiny_debug.config
+
+
 __pycache__
 
 /finetune/__pycache__
@@ -16,4 +19,17 @@ __pycache__
 /hpc_fu
 
 *.DS_Store
+
+/finetune/benchmark_results/*
+benchmark_dataloader.py
+
+/finetune/configs/cpus_test.config
+
+/finetune/cpus_test.py
+
+
+
+/finetune/__pychache__/*
+
+
 

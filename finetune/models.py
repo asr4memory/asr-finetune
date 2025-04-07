@@ -21,7 +21,7 @@ def get_whisper_models(model_type,target_language,return_timestamps=False, load_
        tokenizer (WhisperTokenizer): loaded Whiseper Tokenizer Object
        processor (WhisperProcessor): Loaded Whisper Processor Object
     """
-    model_dir = os.path.join("/scratch/usr/",os.getenv('USER')+"/whisper-large-v3")
+    model_dir = os.path.join("/scratch/usr/",os.getenv('USER')+"/models/whisper-large-v3")
     
     feature_extractor = WhisperFeatureExtractor.from_pretrained(f"{model_dir}/feature_extractor", local_files_only=True,load_in_8bit=load_in_8bit)
     tokenizer = WhisperTokenizer.from_pretrained(f"{model_dir}/tokenizer", local_files_only=True, language=target_language, task="transcribe")
