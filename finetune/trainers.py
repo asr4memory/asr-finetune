@@ -218,6 +218,7 @@ def train_whisper_model(config, training_kwargs=None, data_collators=None):
     eval_ds_iterable = eval_ds.iter_torch_batches(
         prefetch_batches = training_kwargs["prefetch_batches"],
         batch_size=config["per_device_train_batch_size"], collate_fn=data_collators["validation"])
+
     log_memory_usage("after_data_load")
     #
     # from utils import RayIterableDataset

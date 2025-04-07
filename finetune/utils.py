@@ -260,8 +260,8 @@ def create_ray_indexloaders(
     # test_ds = ray.data.from_items([{"idx": i} for i in test_indices])#.repartition(num_blocks=num_parallel_tasks)
 
     train_ds = ray.data.from_items([{"idx": i} for i in range(len(train_indices))])
-    val_ds = ray.data.from_items([{"idx": i} for i in range(len(train_indices))])
-    test_ds = ray.data.from_items([{"idx": i} for i in range(len(train_indices))])
+    val_ds = ray.data.from_items([{"idx": i} for i in range(len(val_indices))])
+    test_ds = ray.data.from_items([{"idx": i} for i in range(len(test_indices))])
     return train_ds, val_ds, test_ds
 
 

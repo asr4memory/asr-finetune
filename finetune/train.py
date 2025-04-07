@@ -268,9 +268,9 @@ if __name__ == "__main__":
 
         # Create the parallel collator with 4 reader processes
         data_collators = {"training": SimpleStreamingCollator(train_h5_path,processor,feature_extractor,tokenizer,
-                                                              num_workers=args.cpus_per_trial -1),
+                                                              num_workers=args.cpus_per_trial),
                           "validation": SimpleStreamingCollator(val_h5_path,processor,feature_extractor,tokenizer,
-                                                              num_workers=args.cpus_per_trial -1)
+                                                              num_workers=args.cpus_per_trial)
                           }
 
 
