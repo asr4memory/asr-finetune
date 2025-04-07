@@ -6,6 +6,9 @@ data
 /finetune/dictionary_check.ipynb
 /finetune/output/*
 
+/finetune/configs/tiny_debug.config
+
+
 __pycache__
 
 /finetune/__pycache__
@@ -24,7 +27,7 @@ benchmark_dataloader.py
 
 /finetune/cpus_test.py
 
-/finetune/configs/tiny_debug.config
+
 
 /finetune/__pychache__/*
 
