@@ -1,3 +1,7 @@
+# IMPORTANT UPDATES
+Please change you the folder where you have your models from `/scratch/usr/$USER/whisper-large-v3` to
+`/scratch/usr/$USER/models/whisper-large-v3`.
+
 # Login on Zuse-HPC 
 There are different login nodes. The GPUs are in ```blogin2.nhr.zib.de``` and ```blogin1.nhr.zib.de```.
 So you need to ssh in ```USERNAME@blogin2.nhr.zib.de``` for example, [see here](https://nhr-zib.atlassian.net/wiki/spaces/PUB/pages/6717441/GPU+A100+partition)
@@ -32,7 +36,7 @@ In PERM, we can store fine-tuned models.
 Different to the FU-Cluster, we need to pre-download the Whisper Model. For that:
 
 1. Run `download_HF_model`
-2. Move the created folder to `/scratch/usr/$USER/whisper-large-v3`. In there, there should be the following folders:
+2. Move the created folder to `/scratch/usr/$USER/models/whisper-large-v3`. In there, there should be the following folders:
    - `feature_extractor`
    - `model`
    - `models--openai--whisper-large-v3`
