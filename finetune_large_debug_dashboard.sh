@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --mail-type=fail,end
 #SBATCH --job-name="large_debug"
-#SBATCH --time=01:00:00
+#SBATCH --time=00:45:00
 #SBATCH --mem=64G  #32
 
 #SBATCH --partition=gpu-a100:test
@@ -14,11 +14,11 @@
 #SBATCH --nodes=1
 ###SBATCH --exclusive
 #SBATCH --tasks-per-node=1  ### ensure that each Ray worker runtime will run on a separate node
-#SBATCH --cpus-per-task=4  ### cpus and gpus per node
-#SBATCH --gres=gpu:A100:1 ##change num_GPU below to same number
+#SBATCH --cpus-per-task=32  ### cpus and gpus per node
+#SBATCH --gres=gpu:A100:4 ##change num_GPU below to same number
 
-num_gpus=1
-ray stop
+num_gpus=4
+#ray stop
 
 #### sound file bug
 
@@ -33,7 +33,7 @@ echo "num_gpus is $num_gpus"
 module load cuda/11.8
 
 module load anaconda3/2023.09
-source activate finetune
+source activate FU
 ##module load openmpi/gcc.11/4.1.4
 
 nvidia-smi
@@ -84,7 +84,7 @@ echo "Login node IP: ${login_node_ip}"
 ## Test if the head node can reach Grafana through the tunnel
 #srun --nodes=1 --ntasks=1 -w "$head_node" \
 #    bash -c 'curl -s http://localhost:3010/api/health || echo "Cannot reach Grafana"'
-#
+#    
 ## Wait for the port forwarding to establish
 #sleep 5
 #
@@ -115,38 +115,38 @@ echo "IP Head: $ip_head"
 #srun --nodes=1 --ntasks=1 -w "$head_node" \
 #    bash -c 'cd /home/bemchrvt/asr-finetune/grafana-v11.5.2; nohup ./bin/grafana server --config /scratch/usr/bemchrvt/tmp/session_latest/metrics/grafana/grafana.ini web > grafana.log 2>&1 &'
 
-echo "Starting Grafana on the head node..."
-# First, create a separate script to run on the head node
-cat > /tmp/start_grafana.sh << 'EOF'
-#!/bin/bash
-# Change to Grafana directory
-cd /home/bemchrvt/asr-finetune/grafana-v11.5.2
-
-# Create data directory
-mkdir -p /scratch/usr/bemchrvt/tmp/grafana
-
-# Start Grafana with basic configuration
-nohup ./bin/grafana server \
-  --config="/scratch/usr/bemchrvt/tmp/session_latest/metrics/grafana/grafana.ini" \
-  --homepath="/home/bemchrvt/asr-finetune/grafana-v11.5.2" \
-  > /scratch/usr/bemchrvt/tmp/grafana.log 2>&1 &
-
-# Give it a moment to start
-sleep 5
-
-# Check if it's running
-echo "Checking if Grafana started:"
-ps aux | grep grafana | grep -v grep
-echo "Testing Grafana API access:"
-curl -s http://localhost:3000/api/health || echo "Grafana not responding"
-EOF
-
-# Make the script executable
-chmod +x /tmp/start_grafana.sh
-
-# Run the script on the head node
-echo "Starting Grafana on the head node..."
-srun --nodes=1 --ntasks=1 -w "$head_node" /tmp/start_grafana.sh
+#echo "Starting Grafana on the head node..."
+## First, create a separate script to run on the head node
+#cat > /tmp/start_grafana.sh << 'EOF'
+##!/bin/bash
+## Change to Grafana directory
+#cd /home/bemchrvt/asr-finetune/grafana-v11.5.2
+#
+## Create data directory
+#mkdir -p /scratch/usr/bemchrvt/tmp/grafana
+#
+## Start Grafana with basic configuration
+#nohup ./bin/grafana server \
+#  --config="/scratch/usr/bemchrvt/tmp/session_latest/metrics/grafana/grafana.ini" \
+#  --homepath="/home/bemchrvt/asr-finetune/grafana-v11.5.2" \
+#  > /scratch/usr/bemchrvt/tmp/grafana.log 2>&1 &
+#
+## Give it a moment to start
+#sleep 5
+#
+## Check if it's running
+#echo "Checking if Grafana started:"
+#ps aux | grep grafana | grep -v grep
+#echo "Testing Grafana API access:"
+#curl -s http://localhost:3000/api/health || echo "Grafana not responding"
+#EOF
+#
+## Make the script executable
+#chmod +x /tmp/start_grafana.sh
+#
+## Run the script on the head node
+#echo "Starting Grafana on the head node..."
+#srun --nodes=1 --ntasks=1 -w "$head_node" /tmp/start_grafana.sh
 
 
 
@@ -224,4 +224,4 @@ echo "STARTING python command"
 ##export TQDM_DISABLE=1
 
 cd finetune
-python -u train.py -c configs/train_whisper_largev3.config --storage_path /scratch/usr/$USER/ray_results
+python -u train.py -c configs/train_whisper_largev3_debug.config --storage_path /scratch/usr/$USER/ray_results

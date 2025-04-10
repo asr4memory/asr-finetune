@@ -93,7 +93,8 @@ def parse_args():
     #https://github.com/Vaibhavs10/fast-whisper-finetuning?tab=readme-ov-file#evaluation-and-inference
 
     # Dataset settings
-    parser.add_argument("--h5", action="store_true", help="If data is in .h5 format")
+    parser.add_argument("--single_file", action="store_true", help="If data is in a single.h5 format. If False, assume "
+                                                                   "folder structure of: training and talidation")
 
 
     ## Hyperparameter Optimization settings for Ray Tune
@@ -210,7 +211,7 @@ if __name__ == "__main__":
 
     path_to_data = os.path.join("/scratch/usr/", os.getenv('USER') + "/data") if args.path_to_data is None else args.path_to_data
 
-    if args.h5:
+    if args.single_file:
         h5_path = os.path.join(path_to_data, args.dataset_name + ".h5") #"eg_dataset_complete_5sec.h5")
 
         # Load dataset size
@@ -222,6 +223,8 @@ if __name__ == "__main__":
         # Generate shuffled indices for train, validation, and test splits
         # Important: Keep Random seed so that test set stays constant and results are compareable
         split_dict = split_indices(dataset_size, train_ratio=0.8, val_ratio=0.1, seed=args.random_seed)
+        np.savez(os.path.join(path_to_data, "split_dict_"+str(args.random_seed)+".npz"), **split_dict)
+
         len_train_set = len(split_dict["train"])    #(we need to know that for determining the number
                                                     # of update steps for the scheduler)
 
@@ -232,7 +235,7 @@ if __name__ == "__main__":
 
             train_h5_path = os.path.join(path_to_data, args.dataset_name+"_training_"+str(args.random_seed)+".h5")
             if not os.path.exists(train_h5_path):
-                # Create training H5
+        #         # Create training H5
                 with h5py.File(train_h5_path, "w") as train_file:
                     for key in source.keys():
                         train_file.create_dataset(key, data=source[key][train_indices])
@@ -244,35 +247,45 @@ if __name__ == "__main__":
                     for key in source.keys():
                         val_file.create_dataset(key, data=source[key][val_indices])
 
-            test_h5_path = os.path.join(path_to_data, args.dataset_name + "_testing_" + str(args.random_seed) + ".h5")
-            if not os.path.exists(test_h5_path):
-                # Optionally create test H5
-                with h5py.File(test_h5_path, "w") as test_file:
-                    for key in source.keys():
-                        test_file.create_dataset(key, data=source[key][test_indices])
-
+            # Optionally create test H5
+            # test_h5_path = os.path.join(path_to_data, args.dataset_name + "_testing_" + str(args.random_seed) + ".h5")
+            # if not os.path.exists(test_h5_path):
+            #
+            #     with h5py.File(test_h5_path, "w") as test_file:
+            #         for key in source.keys():
+            #             test_file.create_dataset(key, data=source[key][test_indices])
 
         # Hack: Ray Tune requires a ray dataset object. However, converting log-mel spectogram formatare not supported
         # So we create a index ray dataset and the actual data-fetching is Wrapped in the
         train_loader, val_loader, test_loader = create_ray_indexloaders(split_dict) #,num_parallel_tasks=1) #args.cpus_per_trial)
-
-        ray_datasets = {
-            "train": train_loader,
-            "validation": val_loader,
-        }
-
         from utils import SimpleStreamingCollator
-
-        # Create the parallel collator with 4 reader processes
         data_collators = {"training": SimpleStreamingCollator(train_h5_path,processor,feature_extractor,tokenizer,
                                                               num_workers=args.cpus_per_trial),
                           "validation": SimpleStreamingCollator(val_h5_path,processor,feature_extractor,tokenizer,
                                                               num_workers=args.cpus_per_trial)
                           }
 
-
     else:
-        logger.info('This scripts only works with .h5 data!')
+        # pdb.set_trace()
+        train_loader, shard_to_file_train = create_ray_indexloaders(os.path.join(path_to_data,'training'),
+                                                              batch_size=args.per_device_train_batch_size)
+        len_train_set = train_loader.count()
+
+        val_loader, shard_to_file_val = create_ray_indexloaders(os.path.join(path_to_data, 'training'),
+                                                              batch_size=args.per_device_train_batch_size)
+        ray_datasets = {
+            "train": train_loader,
+            "validation": val_loader,
+        }
+
+        from utils import MultiShardStreamingCollator
+
+        # Create the parallel collator with 4 reader processes
+        data_collators = {"training": MultiShardStreamingCollator(shard_to_file_train,processor,feature_extractor,tokenizer,
+                                                              num_workers=args.cpus_per_trial),
+                          "validation": MultiShardStreamingCollator(shard_to_file_val,processor,feature_extractor,tokenizer,
+                                                              num_workers=args.cpus_per_trial)
+                          }
 
     logger.info('len_train_set: %s', len_train_set)
 
@@ -440,7 +453,7 @@ if __name__ == "__main__":
     """
 
     def get_hyperparameters(args):
-        HYPERPARAMETERS = ['learning_rate', 'warmup_steps', 'weight_decay', 'scheduler']
+        HYPERPARAMETERS = ['learning_rate', 'warmup_steps', 'weight_decay', 'scheduler','label_smoothing_factor']
         train_loop_config_ = {}
         train_loop_config_["per_device_train_batch_size"] = args.per_device_train_batch_size
         train_loop_config_["warmup_steps"] = 0
@@ -450,7 +463,7 @@ if __name__ == "__main__":
             assert hyper_param in HYPERPARAMETERS, logger.info("Hyperparameter search for %s not implemented",hyper_param)
 
             if hyper_param == 'learning_rate':
-                train_loop_config_[hyper_param] = tune.loguniform(1e-5, 1e-1)
+                train_loop_config_[hyper_param] = tune.loguniform(1e-6, 5e-4)
             elif hyper_param == 'warmup_steps':
                 train_loop_config_[hyper_param] = tune.randint(0, args.max_warmup_steps + 1)
             elif hyper_param == "weight_decay":
@@ -463,7 +476,9 @@ if __name__ == "__main__":
                 # POLYNOMIAL = "polynomial"
                 # CONSTANT = "constant"
                 # CONSTANT_WITH_WARMUP = "constant_with_warmup"
-                train_loop_config_[hyper_param] = tune.choice(["linear","cosine"])
+                train_loop_config_[hyper_param] = tune.choice(["linear","cosine","cosine_with_restarts","polynomial"])
+            elif hyper_param == "label_smoothing_factor":
+                train_loop_config_[hyper_param] = tune.uniform(0.0, 0.2)
 
         return train_loop_config_
 

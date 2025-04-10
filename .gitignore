@@ -15,6 +15,7 @@ __pycache__
 
 .idea
 
+*.ipynb
 
 /hpc_fu
 
@@ -30,6 +31,8 @@ benchmark_dataloader.py
 
 
 /finetune/__pychache__/*
+
+memory_usage.log
 
 
 

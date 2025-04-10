@@ -1,28 +1,20 @@
 #!/bin/bash
 #SBATCH --mail-type=fail,end
-#SBATCH --job-name="large_debug"
-#SBATCH --time=01:00:00
-#SBATCH --mem=64G  #32
+#SBATCH --job-name="large_tobi"
+#SBATCH --time=24:00:00
+#SBATCH --mem=512G  #32
 
-#SBATCH --partition=gpu-a100:test
-###SBATCH --partition=gpu-a100:shared
+#SBATCH --partition=gpu-a100
+####SBATCH --partition=gpu-a100:test
+####SBATCH --partition=gpu-a100:shared
 
 
-##SBATCH --qos=standard
-###SBATCH --nodelist=g007
-
-#SBATCH --nodes=1
+#SBATCH --nodes=4
 ###SBATCH --exclusive
 #SBATCH --tasks-per-node=1  ### ensure that each Ray worker runtime will run on a separate node
 #SBATCH --cpus-per-task=32  ### cpus and gpus per node
 #SBATCH --gres=gpu:A100:4 ##change num_GPU below to same number
-
 num_gpus=4
-#ray stop
-
-
-# automaticall set-up user mail
-##scontrol update job $SLURM_JOB_ID MailUser=$USER@zedat.fu-berlin.de
 
 echo "num_gpus is $num_gpus"
 
@@ -38,8 +30,8 @@ source activate FU
 nvidia-smi
 nvcc --version
 
-export TMPDIR=/scratch/usr/$USER/tmp
-mkdir -p $TMPDIR
+#export TMPDIR=/scratch/usr/$USER/tmp
+#mkdir -p $TMPDIR
 echo "Temp dir $TMPDIR created"
 
 # Getting the node names
@@ -61,6 +53,11 @@ fi
 echo "IPV6 address detected. We split the IPV4 address as $head_node_ip"
 fi
 
+# Find a free port for Grafana (let's try 3010 instead of 3000)
+GRAFANA_PORT=3000
+# More reliable way to get login node hostname
+login_node_ip=$(hostname -I | awk '{print $1}')
+echo "Login node IP: ${login_node_ip}"
 
 
 port=6379
@@ -70,11 +67,12 @@ echo "IP Head: $ip_head"
 
 
 
-
 echo "Starting HEAD at $head_node"
 srun --nodes=1 --ntasks=1 -w "$head_node" \
     ray start --head --node-ip-address="$head_node_ip" --port=$port \
-    --num-cpus "${SLURM_CPUS_PER_TASK}" --num-gpus $num_gpus --temp-dir "${TMPDIR}" --block &
+    --include-dashboard=true --dashboard-host=0.0.0.0 --dashboard-port=8265 \
+    --metrics-export-port=9090 \
+    --num-cpus "${SLURM_CPUS_PER_TASK}" --num-gpus $num_gpus --block &
 
 
 ##--temp-dir "${TMPDIR}"
@@ -101,4 +99,5 @@ echo "STARTING python command"
 ##export TQDM_DISABLE=1
 
 cd finetune
-python -u train.py -c configs/train_whisper_largev3_debug.config --storage_path /scratch/usr/$USER/ray_results
+python -u train.py -c configs/train_whisper_largev3_tobi.config --storage_path /scratch/usr/$USER/ray_results
+
