@@ -40,145 +40,6 @@ def log_memory_usage(label=""):
     logging.info(
         f"MEMORY [{label}]: {mem.percent}% - Used: {mem.used / 1e9:.2f} GB, Available: {mem.available / 1e9:.2f} GB")
 
-
-#
-# def load_and_prepare_data_from_folders(path,feature_extractor,tokenizer,test_size=0.2, seed = 0, evaluate = False,
-#                                        debug = False, num_proc = 1):
-#     """Loads and prepares data from a folder directory.
-#
-#     `Important`: Each folder needs to have a subfolder "data" (name not important) containing the .mav audio files AND
-#                  a metadata.csv file with columns 'file_name' and 'transcription'. The file_name must match the file
-#                  name in the data folder. The transcription is a string of the true transcription of the audio.
-#
-#     We
-#         1. loop through subfolders of path-folder, load each folder as dataset, and concatenate datasets
-#         2. Do the train, validation, and test splits
-#         3. Resample the audio data and compute the log-Mel input features
-#
-#     Args:
-#         path (str): Directory path of head data folder
-#         feature_extractor (WhisperFeatureExtractor): Feature extractor calculates the log-Mel representations of inputs
-#                                                      used for training and evaluation
-#         tokenizer (WhisperTokenizer): The tokenizer is converting target-text into tokens.
-#         test_size (float): Fraction of total data used for testing.
-#         seed (int): random seed for reproducibility
-#         evaluate (bool): If true, only the test set is created. Otherwise: train and validation set.
-#         debug (bool): If true, does some statistics on the test set (if evaluate=True) or validation set (otherwise).
-#                       Should result to the same value if one wants to compare two different models.
-#     """
-#     data_collection = []
-#     first_level_subfolders = [f.path for f in os.scandir(path) if f.is_dir()]
-#     num_rows = 0
-#     """Step 1"""
-#     for subfolder in first_level_subfolders:
-#         dataset = load_dataset("audiofolder", data_dir=subfolder) # Laden des Datasets von der bereinigten CSV-Datei
-#         data_collection += [dataset['train']]
-#         num_rows += dataset['train'].num_rows
-#
-#     dataset = concatenate_datasets(data_collection)
-#
-#     assert dataset.num_rows == num_rows, "Some data got lost in the process of concatenation."
-#
-#     """Step 2: Dataset in Trainings- und Testsets aufteilen """
-#     split_dataset = dataset.train_test_split(test_size=test_size, seed = seed)  # 20% für Testdaten
-#     split_trainset = split_dataset['train'].train_test_split(test_size=0.1, seed = seed) # 10% of training for validation
-#
-#     # Erstellen eines DatasetDict-Objekts
-#     if evaluate:
-#         dataset_dict = DatasetDict({
-#             'test': split_dataset['test']
-#         })
-#     else:
-#         dataset_dict = DatasetDict({
-#             'train': split_trainset['train'], #split_dataset['train'],
-#             'validation': split_trainset['test'],
-#         })
-#
-#     def prepare_dataset(batch):
-#         # load and resample audio data from 48 to 16kHz
-#         audio = batch["audio"]
-#
-#         # compute log-Mel input features from input audio array
-#         batch["input_features"] = feature_extractor(audio["array"], sampling_rate=audio["sampling_rate"]).input_features[0]
-#
-#         # encode target text to label ids
-#         batch["labels"] = tokenizer(batch["transcription"]).input_ids
-#         return batch
-#
-#     """Step 3: Apply prepare_dataset mapping to dataset_dict"""
-#     dataset_dict = dataset_dict.map_batches(prepare_dataset,
-#                    remove_columns=dataset_dict.column_names["test"] if evaluate else dataset_dict.column_names["train"],
-#                                             num_proc=num_proc)
-#
-#     logger.info('len validation set: %s', split_trainset['test'].num_rows)
-#     logger.info('len test set: %s', split_dataset['test'].num_rows)
-#
-#     return dataset_dict, split_trainset['train'].num_rows
-
-
-
-
-# from dataclasses import dataclass
-# from typing import Any
-# import numpy as np
-# @dataclass
-# class DataCollatorSpeechSeq2SeqWithPadding:
-#     """Data Collator for Speech Seq2Seq models with Padding
-#
-#     We used the collator suggested by the tutorial: https://huggingface.co/blog/fine-tune-whisper.
-#     We had to slightly modify it due our data being in a different format as required by ray tune.
-#
-#     Attributes:
-#        processor (WhisperProcessor): Processor used for padding (normalizing data to same length)
-#        decoder_start_token_id (int): Token indicating the Beginning Of Setence (BOS)
-#
-#     Methods:
-#        __call__(features): Processing a dictionary of input features
-#     """
-#     processor: Any
-#     decoder_start_token_id: int
-#
-#     def __call__(self, features):
-#         """ Processing a dictionary of input features.
-#
-#         Input features are padded to `longest` forms and pytorch tensors are returned.
-#
-#         Args:
-#             features (dict): A dictionary with keys 'input_features' consiting of log-Mel features and tokenized
-#                              'labels'
-#         Returns"
-#             batch (dict): Dictionary of padded `input_features` and `labels` as pytorch tensors
-#         """
-#         # split inputs and labels since they have to be of different lengths and need different padding methods
-#         # first treat the audio inputs by simply returning torch tensors
-#         # input_features = [{"input_features": np.vstack(list(feature))} for feature in features["input_features"]]
-#         # batch = self.processor.feature_extractor.pad(input_features,  padding='longest', return_tensors="pt")
-#         #
-#         # #lab_feat = [{"input_ids": feature} for feature in features["labels"]]
-#         # # pad the labels to max length
-#         # labels_batch = lab_feat #self.processor.tokenizer.pad(lab_feat, return_tensors="pt")
-#         #
-#         #
-#         # # replace padding with -100 to ignore loss correctly
-#         # labels = labels_batch["input_ids"].masked_fill(labels_batch.attention_mask.ne(1), -100)
-#         #
-#         # # if bos token is appended in previous tokenization step,
-#         # # cut bos token here as it's append later anyways
-#         # if (labels[:, 0] == self.decoder_start_token_id).all().cpu().item():
-#         #     labels = labels[:, 1:]
-#         #
-#         # batch["labels"] = labels
-#         input_features = [{"input_features": feat["input_features"].reshape([128, 3000])} for feat in features["input_features"]]
-#
-#         batch = self.processor.feature_extractor.pad(input_features, padding='longest', return_tensors="pt")
-#
-#         # batch["input_features"] = features["input_features"]
-#         batch["labels"] = features["labels"]
-#         return batch
-#
-
-
-
 def normalize(text):
     """
     Removes certain characters from text and lowers cases.
@@ -240,30 +101,33 @@ def split_indices(dataset_size, train_ratio=0.8, val_ratio=0.1, seed=42):
         "test": np.sort(indices[train_size + val_size:])
     }
 
-### Claude input
+def create_ray_indexloader(file_path: str):
+    """
+    Create Ray dataset for a single HDF5 file.
 
-from typing import Tuple
+    Args:
+        file_path: Path to the HDF5 file
 
-# Updated function to create dataloaders for all splits
-# def create_ray_indexloaders(
-#         split_indices: dict,
-# ) -> Tuple[object, object, object]:
-#
-#     # Get train, validation, and test indices using the provided function
-#     train_indices, val_indices, test_indices = split_indices["train"], split_indices["validation"], split_indices["test"]
-#
-#     # Create Ray datasets for each split
-#     # train_ds = ray.data.from_items([{"idx": i} for i in train_indices])#.repartition(num_blocks=num_parallel_tasks)
-#     # val_ds = ray.data.from_items([{"idx": i} for i in val_indices])#.repartition(num_blocks=num_parallel_tasks)
-#     # test_ds = ray.data.from_items([{"idx": i} for i in test_indices])#.repartition(num_blocks=num_parallel_tasks)
-#
-#     train_ds = ray.data.from_items([{"idx": i} for i in range(len(train_indices))])
-#     val_ds = ray.data.from_items([{"idx": i} for i in range(len(val_indices))])
-#     test_ds = ray.data.from_items([{"idx": i} for i in range(len(test_indices))])
-#     return train_ds, val_ds, test_ds
+    Returns:
+        Ray dataset
+    """
+    # Get number of samples in the file
+    with h5py.File(file_path, 'r') as f:
+        try:
+            num_samples = len(f['audio'])
+        except:
+            num_samples = len(f['audio_waveforms'])
 
+    num_samples = 128
+    # Create items with indices
+    items = [{"idx": idx} for idx in range(num_samples)]
 
-def create_ray_indexloaders(shards_directory: str, batch_size: int = 16):
+    # Create dataset
+    dataset = ray.data.from_items(items)
+
+    return dataset
+
+def create_ray_indexloaders(shards_directory: str):
     """
     Create Ray dataset with shard information from a directory of .h5 files.
 
@@ -288,10 +152,10 @@ def create_ray_indexloaders(shards_directory: str, batch_size: int = 16):
         # Get number of samples in this shard
         with h5py.File(file_path, 'r') as f:
             try:
-                num_samples = len(f['audio_waveforms'])
-            except:
                 num_samples = len(f['audio'])
-
+            except:
+                num_samples = len(f['audio_waveforms'])
+        num_samples = 128
         # Create an item for each sample in this shard
         for idx in range(num_samples):
             items.append({"idx": idx, "shard_id": shard_id})
@@ -301,131 +165,8 @@ def create_ray_indexloaders(shards_directory: str, batch_size: int = 16):
 
     return dataset, shard_to_file
 
-def create_split_h5_files(original_h5_path, output_dir, train_indices=None, val_indices=None,
-                          test_indices=None, random_seed=1337, train_ratio=0.8, val_ratio=0.1):
-    """
-    Create separate H5 files for training, validation, and test sets if they don't exist already.
-
-    Parameters:
-    -----------
-    original_h5_path : str
-        Path to the original H5 file containing all data
-    output_dir : str
-        Directory where split H5 files will be saved
-    train_indices, val_indices, test_indices : list or None
-        Indices for each split. If None, will be generated using train_ratio and val_ratio
-    random_seed : int
-        Random seed for reproducibility when generating splits
-    train_ratio, val_ratio : float
-        Ratios for train and validation sets if indices are not provided
-
-    Returns:
-    --------
-    dict
-        Dictionary with paths to the split H5 files
-    """
-
-
-    os.makedirs(output_dir, exist_ok=True)
-
-    # Generate file paths
-    dataset_name = os.path.basename(original_h5_path)
-    base_name = os.path.splitext(dataset_name)[0]
-
-    train_h5_path = os.path.join(output_dir, f"{base_name}_train.h5")
-    val_h5_path = os.path.join(output_dir, f"{base_name}_val.h5")
-    test_h5_path = os.path.join(output_dir, f"{base_name}_test.h5")
-
-    # Check if files already exist
-    all_files_exist = (
-            os.path.exists(train_h5_path) and
-            os.path.exists(val_h5_path) and
-            os.path.exists(test_h5_path)
-    )
-
-    if all_files_exist:
-        logger.info(f"Split H5 files already exist in {output_dir}")
-        return {
-            "train": train_h5_path,
-            "validation": val_h5_path,
-            "test": test_h5_path
-        }
-
-    logger.debug(f"Creating split H5 files in {output_dir}")
-
-    # If indices are not provided, generate them
-    if train_indices is None or val_indices is None or test_indices is None:
-        with h5py.File(original_h5_path, "r") as f:
-            dataset_size = len(f["audio"])
-
-        split_dict = split_indices(
-            dataset_size,
-            train_ratio=train_ratio,
-            val_ratio=val_ratio,
-            seed=random_seed
-        )
-
-        train_indices = split_dict["train"]
-        val_indices = split_dict["validation"]
-        test_indices = split_dict["test"]
-
-    # Create the split files
-    with h5py.File(original_h5_path, "r") as source:
-        # Get all keys (datasets) in the source file
-        keys = list(source.keys())
-
-        # Create training H5 if it doesn't exist
-        if not os.path.exists(train_h5_path):
-            logger.debug(f"Creating training H5 file: {train_h5_path}")
-            with h5py.File(train_h5_path, "w") as train_file:
-                for key in keys:
-                    # Create the same dataset in the new file
-                    train_file.create_dataset(
-                        key,
-                        data=source[key][train_indices],
-                        compression="gzip",
-                        compression_opts=4
-                    )
-
-        # Create validation H5 if it doesn't exist
-        if not os.path.exists(val_h5_path):
-            logger.debug(f"Creating validation H5 file: {val_h5_path}")
-            with h5py.File(val_h5_path, "w") as val_file:
-                for key in keys:
-                    val_file.create_dataset(
-                        key,
-                        data=source[key][val_indices],
-                        compression="gzip",
-                        compression_opts=4
-                    )
-
-        # Create test H5 if it doesn't exist
-        if not os.path.exists(test_h5_path):
-            logger.debug(f"Creating test H5 file: {test_h5_path}")
-            with h5py.File(test_h5_path, "w") as test_file:
-                for key in keys:
-                    test_file.create_dataset(
-                        key,
-                        data=source[key][test_indices],
-                        compression="gzip",
-                        compression_opts=4
-                    )
-
-    logger.info("Split H5 files created successfully")
-    return {
-        "train": train_h5_path,
-        "validation": val_h5_path,
-        "test": test_h5_path
-    }
-
 import ray
-
-import torch
-from typing import Dict, List, Any
-import time
-from concurrent.futures import ProcessPoolExecutor
 import os
-import functools
 
 
 # This needs to be a top-level function for multiprocessing to work properly
@@ -449,474 +190,10 @@ def _process_hdf5_index(hdf5_path, idx):
         return idx, None, None
 
 
-class SimpleMultiprocessingCollator:
-    """
-    A simple multiprocessing-based data collator that works with Ray.
-    Uses Python's built-in multiprocessing to parallelize HDF5 reading.
-    """
-
-    def __init__(self, hdf5_path, processor, feature_extractor, tokenizer,
-                 num_workers=None):
-        self.hdf5_path = hdf5_path
-        self.processor = processor
-        self.feature_extractor = feature_extractor
-        self.tokenizer = tokenizer
-        # Use at most half of available CPUs to avoid resource contention
-        self.num_workers = num_workers or max(1, min(4, multiprocessing.cpu_count() // 2))
-
-        # Performance tracking
-        self.batch_times = []
-        self.batch_count = 0
-        # Add prefetching
-        self.prefetch_queue = Queue(maxsize=3)
-        self.prefetch_thread = None
-        self._start_prefetching()
-
-    def __call__(self, batch_dict: Dict[str, List[Any]]) -> Dict[str, torch.Tensor]:
-        """Process a batch using multiprocessing"""
-        start_time = time.time()
-
-        # Get indices
-        indices = batch_dict['idx']
-
-        # Create the process executor
-        # Use at most 4 workers to avoid overwhelming the system
-        with ProcessPoolExecutor(max_workers=self.num_workers) as executor:
-            # Create a partial function with hdf5_path filled in
-            process_func = functools.partial(_process_hdf5_index, self.hdf5_path)
-
-            # Map indices to workers and collect results
-            results = list(executor.map(process_func, indices))
-
-        # Sort results by original index position
-        # since they might come back in a different order
-        index_dict = {idx: i for i, idx in enumerate(indices)}
-        sorted_results = sorted(results, key=lambda x: index_dict[x[0]])
-
-        # Extract audio and transcriptions
-        audio_list = []
-        transcription_list = []
-
-        for _, audio, transcription in sorted_results:
-            if audio is not None:  # Check for errors during processing
-                audio_list.append(audio)
-                transcription_list.append(transcription)
-
-        # Process features in the main process
-        mel_features_list = []
-        for audio in audio_list:
-            features = self.feature_extractor(audio, sampling_rate=16000)
-            mel_features_list.append({"input_features": features.input_features[0]})
-
-        # Prepare the final dataset
-        result = self._prepare_dataset(mel_features_list, transcription_list)
-
-        # Track performance
-        elapsed = time.time() - start_time
-        self.batch_times.append(elapsed)
-        self.batch_count += 1
-
-        # Print performance stats occasionally
-        if self.batch_count % 5 == 0:  # Print more often
-            recent_times = self.batch_times[-5:] if len(self.batch_times) >= 5 else self.batch_times
-            avg_time = sum(recent_times) / len(recent_times)
-            samples_per_sec = len(indices) / avg_time
-            print(f"Batch {self.batch_count}: {avg_time:.2f}s, {samples_per_sec:.1f} samples/sec")
-
-            # Keep batch_times from growing too large
-            if len(self.batch_times) > 50:
-                self.batch_times = self.batch_times[-25:]
-
-        return result
-
-    def _start_prefetching(self):
-        """Start background thread for prefetching batches"""
-        if self.prefetch_thread is None or not self.prefetch_thread.is_alive():
-            self.prefetch_thread = threading.Thread(
-                target=self._prefetch_worker,
-                daemon=True
-            )
-            self.prefetch_thread.start()
-
-    def _prepare_dataset(self, mel_features_list, transcriptions):
-        """Prepare the final dataset from processed features and transcriptions"""
-        # Pad features
-        padded_features = self.feature_extractor.pad(
-            mel_features_list,
-            padding='longest',
-            return_tensors="pt"
-        )
-
-        # Get input features (keep as float32)
-        input_features = padded_features.input_features
-
-        # Process transcriptions
-        tokenized_labels = []
-        for text in transcriptions:
-            if not isinstance(text, str):
-                text = str(text)
-            tokenized = self.tokenizer(text).input_ids
-            tokenized_labels.append(tokenized)
-
-        # Pad labels
-        label_features = [{"input_ids": ids} for ids in tokenized_labels]
-        labels_batch = self.tokenizer.pad(label_features, return_tensors="pt")
-        labels = labels_batch["input_ids"].masked_fill(
-            labels_batch.attention_mask.ne(1),
-            -100
-        )
-
-        return {
-            "input_features": input_features,
-            "labels": labels
-        }
-
-
-import threading
-from queue import Queue
 import multiprocessing
-import numpy as np
-import h5py
-
-
-class SimpleMultiprocessingCollatorFast:
-    """
-    A multiprocessing collator that is properly serializable for Ray
-    """
-
-    def __init__(self, hdf5_path, processor, feature_extractor, tokenizer, num_workers=None):
-        self.hdf5_path = hdf5_path
-        self.processor = processor
-        self.feature_extractor = feature_extractor
-        self.tokenizer = tokenizer
-        # Use more CPUs when available
-        self.num_workers = min(8, multiprocessing.cpu_count() // 4)
-        # self.num_workers = num_workers or max(2, multiprocessing.cpu_count() - 1)
-        # Performance tracking
-        self.batch_times = []
-        self.batch_count = 0
-
-        # No threading or locks that would cause serialization issues
-        self._last_batch_indices = None
-
-    def __call__(self, batch_dict):
-        """Process a batch using multiprocessing"""
-        start_time = time.time()
-
-        indices = batch_dict['idx']
-        self._last_batch_indices = indices  # Store for debugging
-
-        # Process in parallel using a process pool
-        # This avoids threading locks by using separate processes
-        with multiprocessing.Pool(processes=self.num_workers) as pool:
-            results = pool.map(
-                self._process_index_wrapper,
-                [(self.hdf5_path, idx) for idx in indices]
-            )
-
-        # Filter out any failed processings
-        valid_results = [(idx, audio, trans) for idx, audio, trans in results if audio is not None]
-
-        # if not valid_results:
-        #     print(f"Warning: No valid results for batch with indices {indices}")
-        #     # Return a minimal valid batch
-        #     return {
-        #         "input_features": torch.zeros((1, 80, 3000), dtype=torch.float16),
-        #         "labels": torch.tensor([[-100]]) #, dtype=torch.long)
-        #     }
-
-        # Unpack results
-        _, audio_list, transcription_list = zip(*valid_results)
-
-        # Process features
-        mel_features_list = []
-        for audio in audio_list:
-            features = self.feature_extractor(
-                audio,
-                sampling_rate=16000,
-            )
-            mel_features_list.append({
-                "input_features": features.input_features[0]
-            })
-
-        # Track performance
-        elapsed = time.time() - start_time
-        self.batch_times.append(elapsed)
-        self.batch_count += 1
-
-        # Print performance stats occasionally
-        if self.batch_count % 5 == 0:
-            recent_times = self.batch_times[-5:] if len(self.batch_times) >= 5 else self.batch_times
-            avg_time = sum(recent_times) / len(recent_times)
-            samples_per_sec = len(indices) / avg_time
-            print(f"Batch {self.batch_count}: {avg_time:.2f}s, {samples_per_sec:.1f} samples/sec")
-
-            # Keep batch_times from growing too large
-            if len(self.batch_times) > 50:
-                self.batch_times = self.batch_times[-25:]
-
-        return self._prepare_dataset(mel_features_list, transcription_list)
-
-    @staticmethod
-    def _process_index_wrapper(args):
-        """Static method wrapper for multiprocessing"""
-        hdf5_path, idx = args
-        return SimpleMultiprocessingCollatorOptimized._process_index(hdf5_path, idx)
-
-    @staticmethod
-    def _process_index(hdf5_path, idx):
-        """Process a single index - static method for better multiprocessing"""
-        try:
-            start = time.time()
-            with h5py.File(hdf5_path, 'r') as f:
-                audio = np.array(f['audio'][idx], dtype=np.float32).copy()
-                transcription = f['transcription'][idx]
-                if isinstance(transcription, bytes):
-                    transcription = transcription.decode('utf-8')
-            io_time = time.time() - start
-            if idx % 100 == 0:
-                print(f"[DEBUG] I/O time for idx {idx}: {io_time:.3f}s")
-
-            return idx, audio, transcription
-        except Exception as e:
-            print(f"Error processing index {idx}: {e}")
-            return idx, None, None
-
-    def _prepare_dataset(self, mel_features_list, transcriptions):
-        """Prepare the final dataset"""
-        # Pad features
-        padded_features = self.feature_extractor.pad(
-            mel_features_list,
-            padding='longest',
-            return_tensors="pt"
-        )
-
-        # Get input features
-        input_features = padded_features.input_features
-
-        # Process transcriptions
-        tokenized_labels = []
-        for text in transcriptions:
-            if not isinstance(text, str):
-                text = str(text)
-            tokenized = self.tokenizer(text).input_ids
-            tokenized_labels.append(tokenized)
-
-        # Pad labels
-        label_features = [{"input_ids": ids} for ids in tokenized_labels]
-        labels_batch = self.tokenizer.pad(label_features, return_tensors="pt")
-        labels = labels_batch["input_ids"].masked_fill(
-            labels_batch.attention_mask.ne(1),
-            -100
-        )
-
-        return {
-            "input_features": input_features,
-            "labels": labels
-        }
-
-    def __getstate__(self):
-        """
-        Make sure we don't include any non-serializable objects like thread locks
-        """
-        state = self.__dict__.copy()
-        # Clean up potentially problematic attributes
-        for key in list(state.keys()):
-            try:
-                # If something might involve locks, remove it for serialization
-                if any(s in str(type(state[key])).lower() for s in
-                       ['thread', 'lock', 'queue', 'process', 'connection']):
-                    del state[key]
-            except:
-                # If any issues when checking type, just delete it
-                del state[key]
-        return state
-
-class SimpleMultiprocessingCollatorFast:
-    """
-    A multiprocessing collator that is properly serializable for Ray
-    """
-    _shared_hdf5_file = None
-
-    def __init__(self, hdf5_path, processor, feature_extractor, tokenizer, num_workers=None):
-        self.hdf5_path = hdf5_path
-        self.processor = processor
-        self.feature_extractor = feature_extractor
-        self.tokenizer = tokenizer
-        # Use more CPUs when available
-        self.num_workers = min(8, multiprocessing.cpu_count() // 4)
-        # self.num_workers = num_workers or max(2, multiprocessing.cpu_count() - 1)
-        # Performance tracking
-        self.batch_times = []
-        self.batch_count = 0
-
-        # No threading or locks that would cause serialization issues
-        self._last_batch_indices = None
-
-        self.pool = multiprocessing.Pool(processes=self.num_workers, initializer=init_worker,
-                                         initargs=(hdf5_path,))
-
-    def __call__(self, batch_dict):
-        """Process a batch using multiprocessing"""
-        start_time = time.time()
-
-        indices = batch_dict['idx']
-        self._last_batch_indices = indices  # Store for debugging
-
-        # Process in parallel using a process pool
-        # This avoids threading locks by using separate processes
-        # with multiprocessing.Pool(processes=self.num_workers, initializer=init_worker,
-        #                           initargs=(self.hdf5_path,)) as pool:
-        results = selfpool.map(process_index_shared, indices)
-
-        # Filter out any failed processings
-        valid_results = [(idx, audio, trans) for idx, audio, trans in results if audio is not None]
-
-        # if not valid_results:
-        #     print(f"Warning: No valid results for batch with indices {indices}")
-        #     # Return a minimal valid batch
-        #     return {
-        #         "input_features": torch.zeros((1, 80, 3000), dtype=torch.float16),
-        #         "labels": torch.tensor([[-100]]) #, dtype=torch.long)
-        #     }
-
-        # Unpack results
-        _, audio_list, transcription_list = zip(*valid_results)
-
-        # Process features
-        mel_features_list = []
-        for audio in audio_list:
-            features = self.feature_extractor(
-                audio,
-                sampling_rate=16000,
-            )
-            mel_features_list.append({
-                "input_features": features.input_features[0]
-            })
-
-        # Track performance
-        elapsed = time.time() - start_time
-        self.batch_times.append(elapsed)
-        self.batch_count += 1
-
-        # Print performance stats occasionally
-        if self.batch_count % 5 == 0:
-            recent_times = self.batch_times[-5:] if len(self.batch_times) >= 5 else self.batch_times
-            avg_time = sum(recent_times) / len(recent_times)
-            samples_per_sec = len(indices) / avg_time
-            print(f"Batch {self.batch_count}: {avg_time:.2f}s, {samples_per_sec:.1f} samples/sec")
-
-            # Keep batch_times from growing too large
-            if len(self.batch_times) > 50:
-                self.batch_times = self.batch_times[-25:]
-
-        return self._prepare_dataset(mel_features_list, transcription_list)
-
-    def init_worker(hdf5_path):
-        global _shared_hdf5_file
-        import h5py
-        _shared_hdf5_file = h5py.File(hdf5_path, 'r')
-
-    def __del__(self):
-        if hasattr(self, 'pool'):
-            self.pool.close()
-            self.pool.join()
-
-    def process_index_shared(idx):
-        global _shared_hdf5_file
-        try:
-            audio = np.array(_shared_hdf5_file['audio'][idx], dtype=np.float32).copy()
-            transcription = _shared_hdf5_file['transcription'][idx]
-            if isinstance(transcription, bytes):
-                transcription = transcription.decode('utf-8')
-            return idx, audio, transcription
-        except Exception as e:
-            print(f"[ERROR] Index {idx} failed: {e}")
-            return idx, None, None
-
-    @staticmethod
-    def _process_index_wrapper(args):
-        """Static method wrapper for multiprocessing"""
-        hdf5_path, idx = args
-        return SimpleMultiprocessingCollatorOptimized._process_index(hdf5_path, idx)
-
-    @staticmethod
-    def _process_index(hdf5_path, idx):
-        """Process a single index - static method for better multiprocessing"""
-        try:
-            start = time.time()
-            with h5py.File(hdf5_path, 'r') as f:
-                audio = np.array(f['audio'][idx], dtype=np.float32).copy()
-                transcription = f['transcription'][idx]
-                if isinstance(transcription, bytes):
-                    transcription = transcription.decode('utf-8')
-            io_time = time.time() - start
-            if idx % 100 == 0:
-                print(f"[DEBUG] I/O time for idx {idx}: {io_time:.3f}s")
-
-            return idx, audio, transcription
-        except Exception as e:
-            print(f"Error processing index {idx}: {e}")
-            return idx, None, None
-
-    def _prepare_dataset(self, mel_features_list, transcriptions):
-        """Prepare the final dataset"""
-        # Pad features
-        padded_features = self.feature_extractor.pad(
-            mel_features_list,
-            padding='longest',
-            return_tensors="pt"
-        )
-
-        # Get input features
-        input_features = padded_features.input_features
-
-        # Process transcriptions
-        tokenized_labels = []
-        for text in transcriptions:
-            if not isinstance(text, str):
-                text = str(text)
-            tokenized = self.tokenizer(text).input_ids
-            tokenized_labels.append(tokenized)
-
-        # Pad labels
-        label_features = [{"input_ids": ids} for ids in tokenized_labels]
-        labels_batch = self.tokenizer.pad(label_features, return_tensors="pt")
-        labels = labels_batch["input_ids"].masked_fill(
-            labels_batch.attention_mask.ne(1),
-            -100
-        )
-
-        return {
-            "input_features": input_features,
-            "labels": labels
-        }
-
-    def __getstate__(self):
-        """
-        Make sure we don't include any non-serializable objects like thread locks
-        """
-        state = self.__dict__.copy()
-        # Clean up potentially problematic attributes
-        for key in list(state.keys()):
-            try:
-                # If something might involve locks, remove it for serialization
-                if any(s in str(type(state[key])).lower() for s in
-                       ['thread', 'lock', 'queue', 'process', 'connection']):
-                    del state[key]
-            except:
-                # If any issues when checking type, just delete it
-                del state[key]
-        return state
-
-
-
-import multiprocessing
+from multiprocessing import Pool
 import time
-import torch
 import numpy as np
-from transformers import WhisperFeatureExtractor, WhisperTokenizer
-
 _shared_hdf5 = None
 import h5py
 
@@ -935,6 +212,11 @@ def _process_index_shared(idx):
     except Exception as e:
         print(f"[ERROR] Index {idx}: {e}")
         return idx, None, None
+
+def _extract_features_worker(args):
+    audio, sampling_rate, feature_extractor = args
+    features = feature_extractor(audio, sampling_rate=sampling_rate)
+    return {"input_features": features.input_features[0]}
 
 class SimpleStreamingCollator:
     def __init__(self, hdf5_path, processor, feature_extractor, tokenizer, num_workers=None):
@@ -971,10 +253,13 @@ class SimpleStreamingCollator:
         _, audio_list, transcription_list = zip(*valid_results)
 
         # Feature extraction
-        mel_features_list = []
-        for audio in audio_list:
-            features = self.feature_extractor(audio, sampling_rate=16000)
-            mel_features_list.append({"input_features": features.input_features[0]})
+        args_list = [(audio, 16000, self.feature_extractor) for audio in audio_list]
+        with Pool(self.num_workers) as feat_pool:
+            mel_features_list = feat_pool.map(_extract_features_worker, args_list)
+        # mel_features_list = []
+        # for audio in audio_list:
+        #     features = self.feature_extractor(audio, sampling_rate=16000)
+        #     mel_features_list.append({"input_features": features.input_features[0]})
 
         # Performance logging
         elapsed = time.time() - start
@@ -985,6 +270,7 @@ class SimpleStreamingCollator:
             print(f"[Collator] Batch {self.batch_count}: {avg_time:.2f}s, {len(indices)/avg_time:.2f} samples/sec")
 
         return self._prepare_dataset(mel_features_list, transcription_list)
+
 
     def _prepare_dataset(self, mel_features_list, transcriptions):
         padded_features = self.feature_extractor.pad(
@@ -1011,7 +297,35 @@ class SimpleStreamingCollator:
             self.pool.join()
 
 
-class MultiShardStreamingCollator:
+# Define a Ray actor to handle HDF5 files
+@ray.remote
+class HDF5Worker:
+    def __init__(self, hdf5_path, feature_extractor):
+        self.hdf5_path = hdf5_path
+        self.feature_extractor = feature_extractor
+
+    def process_index_with_features(self, idx):
+        try:
+            with h5py.File(self.hdf5_path, "r") as f:
+                # pdb.set_trace()
+                audio = f["audio"][idx]
+                trans = f["transcription"][idx].decode('utf-8')
+            # audio = np.array(_shared_hdf5['audio'][idx], dtype=np.float32).copy()
+            # transcription = _shared_hdf5['transcription'][idx]
+            # if isinstance(transcription, bytes):
+            #     transcription = transcription.decode('utf-8')
+            features = self.feature_extractor(audio, sampling_rate=16000)
+            mel_features = {"input_features": features.input_features[0]}
+
+            return idx, mel_features, trans
+        except Exception as e:
+            print(f"Error processing idx {idx}: {e}")
+            return idx, None, None
+
+
+
+# Revised collator class
+class MultiShardStreamingCollator2:
     def __init__(self, shard_to_file, processor, feature_extractor, tokenizer, num_workers=None):
         """
         Initialize a streaming collator that can handle multiple HDF5 files.
@@ -1021,61 +335,91 @@ class MultiShardStreamingCollator:
             processor: The processor for the model
             feature_extractor: Feature extractor for audio
             tokenizer: Tokenizer for transcriptions
-            num_workers: Number of parallel workers
+            num_workers: Number of parallel workers per shard
         """
         self.shard_to_file = shard_to_file
         self.processor = processor
         self.feature_extractor = feature_extractor
         self.tokenizer = tokenizer
-        self.num_workers = num_workers or min(8, multiprocessing.cpu_count() - 1)
+        self.num_workers = num_workers or 2  # Use a reasonable default
 
-        # Lazy initialization of pools
-        self.pools = {}
+        # Initialize Ray if not already
+        if not ray.is_initialized():
+            ray.init(ignore_reinit_error=True)
+
+        # Create workers per shard
+        self.workers = {}
 
         # Performance tracking
         self.batch_times = []
         self.batch_count = 0
 
-    def _get_pool(self, shard_id):
-        """Get or create a worker pool for the given shard ID."""
-        if shard_id not in self.pools:
+        self.used_shards = set()
+
+    def _get_workers(self, shard_id):
+        """Get or create workers for the given shard ID."""
+        self.used_shards.add(shard_id)
+        # Make shard_id hashable
+        if hasattr(shard_id, 'dtype'):  # Check if it's a numpy array
+            if shard_id.size == 1:
+                shard_id = shard_id.item()
+            else:
+                shard_id = shard_id.flat[0].item()
+
+        if shard_id not in self.workers:
+            # Convert keys in shard_to_file dict if needed
+            converted_shard_to_file = {}
+            for k, v in self.shard_to_file.items():
+                if hasattr(k, 'dtype'):
+                    if k.size == 1:
+                        converted_shard_to_file[k.item()] = v
+                    else:
+                        converted_shard_to_file[k.flat[0].item()] = v
+                else:
+                    converted_shard_to_file[k] = v
+
+            self.shard_to_file = converted_shard_to_file
+
             if shard_id not in self.shard_to_file:
                 raise ValueError(f"Unknown shard ID: {shard_id}")
 
             hdf5_path = self.shard_to_file[shard_id]
-            self.pools[shard_id] = multiprocessing.Pool(
-                processes=self.num_workers,
-                initializer=_init_worker,
-                initargs=(hdf5_path,)
-            )
-        return self.pools[shard_id]
+            # Pass feature_extractor to each worker
+            self.workers[shard_id] = [HDF5Worker.remote(hdf5_path, self.feature_extractor)
+                                      for _ in range(self.num_workers)]
+
+        return self.workers[shard_id]
 
     def __call__(self, batch_dict):
         """Process a batch of indices."""
         start = time.time()
         indices = batch_dict['idx']
 
-        # Get the shard ID for this batch
-        # Assuming all indices in a batch come from the same shard
+        # Get shard ID
         shard_id = batch_dict.get('shard_id', 0)
+        if hasattr(shard_id, 'dtype'):
+            if shard_id.size == 1:
+                shard_id = shard_id.item()
+            else:
+                shard_id = shard_id.flat[0].item()
 
-        # Get or create the appropriate pool
-        pool = self._get_pool(shard_id)
+        # Get workers
+        workers = self._get_workers(shard_id)
 
-        # Parallel data loading
-        results = pool.map(_process_index_shared, indices)
-        valid_results = [(idx, audio, trans) for idx, audio, trans in results if audio is not None]
+        # Distribute work among workers round-robin
+        futures = []
+        for i, idx in enumerate(indices):
+            worker = workers[i % len(workers)]
+            futures.append(worker.process_index_with_features.remote(idx))
+
+        # Get results
+        results = ray.get(futures)
+        valid_results = [(idx, mel_features, trans) for idx, mel_features, trans in results if mel_features is not None]
 
         if not valid_results:
             raise RuntimeError(f"No valid data in batch: {indices}")
 
-        _, audio_list, transcription_list = zip(*valid_results)
-
-        # Feature extraction (same as original)
-        mel_features_list = []
-        for audio in audio_list:
-            features = self.feature_extractor(audio, sampling_rate=16000)
-            mel_features_list.append({"input_features": features.input_features[0]})
+        _, mel_features_list, transcription_list = zip(*valid_results)
 
         # Performance logging
         elapsed = time.time() - start
@@ -1088,7 +432,7 @@ class MultiShardStreamingCollator:
         return self._prepare_dataset(mel_features_list, transcription_list)
 
     def _prepare_dataset(self, mel_features_list, transcriptions):
-        """Prepare the dataset for the model (same as original)."""
+        """Prepare the dataset for the model."""
         # Same implementation as your original method
         padded_features = self.feature_extractor.pad(
             mel_features_list,
@@ -1110,7 +454,88 @@ class MultiShardStreamingCollator:
 
     def __del__(self):
         """Clean up resources when the collator is garbage collected."""
-        for pool in self.pools.values():
-            if pool is not None:
-                pool.close()
-                pool.join()
+        self.workers = {}  # Ray will automatically clean up the actors
+
+class MultiStreamingCollator:
+    def __init__(self, hdf5_path, processor, feature_extractor, tokenizer, num_workers=None):
+        """
+        Initialize a streaming collator for a single HDF5 file.
+
+        Args:
+            hdf5_path: Path to the HDF5 file
+            processor: The processor for the model
+            feature_extractor: Feature extractor for audio
+            tokenizer: Tokenizer for transcriptions
+            num_workers: Number of parallel workers
+        """
+        self.hdf5_path = hdf5_path
+        self.processor = processor
+        self.feature_extractor = feature_extractor
+        self.tokenizer = tokenizer
+        self.num_workers = num_workers or 2  # Use a reasonable default
+
+        # Initialize Ray if not already
+        if not ray.is_initialized():
+            ray.init(ignore_reinit_error=True)
+
+        # Create workers
+        self.workers = [HDF5Worker.remote(hdf5_path, feature_extractor)
+                        for _ in range(self.num_workers)]
+
+        # Performance tracking
+        self.batch_times = []
+        self.batch_count = 0
+
+    def __call__(self, batch_dict):
+        """Process a batch of indices."""
+        start = time.time()
+        indices = batch_dict['idx']
+
+        # Distribute work among workers round-robin
+        futures = []
+        for i, idx in enumerate(indices):
+            worker = self.workers[i % len(self.workers)]
+            futures.append(worker.process_index_with_features.remote(idx))
+
+        # Get results
+        results = ray.get(futures)
+        valid_results = [(idx, mel_features, trans) for idx, mel_features, trans in results if mel_features is not None]
+
+        if not valid_results:
+            raise RuntimeError(f"No valid data in batch: {indices}")
+
+        _, mel_features_list, transcription_list = zip(*valid_results)
+
+        # Performance logging
+        elapsed = time.time() - start
+        self.batch_times.append(elapsed)
+        self.batch_count += 1
+        if self.batch_count % 5 == 0:
+            avg_time = sum(self.batch_times[-5:]) / 5
+            print(f"[Collator] Batch {self.batch_count}: {avg_time:.2f}s, {len(indices)/avg_time:.2f} samples/sec")
+
+        return self._prepare_dataset(mel_features_list, transcription_list)
+
+    def _prepare_dataset(self, mel_features_list, transcriptions):
+        """Prepare the dataset for the model."""
+        padded_features = self.feature_extractor.pad(
+            mel_features_list,
+            padding="longest",
+            return_tensors="pt"
+        )
+        input_features = padded_features.input_features
+
+        tokenized_labels = [
+            self.tokenizer(text if isinstance(text, str) else str(text)).input_ids
+            for text in transcriptions
+        ]
+        label_features = [{"input_ids": ids} for ids in tokenized_labels]
+        labels_batch = self.tokenizer.pad(label_features, return_tensors="pt")
+        labels = labels_batch["input_ids"].masked_fill(
+            labels_batch.attention_mask.ne(1), -100
+        )
+        return {"input_features": input_features, "labels": labels}
+
+    def __del__(self):
+        """Clean up resources when the collator is garbage collected."""
+        self.workers = {}  # Ray will automatically clean up the actors

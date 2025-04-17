@@ -213,6 +213,8 @@ if __name__ == "__main__":
 
     if args.single_file:
         h5_path = os.path.join(path_to_data, args.dataset_name + ".h5") #"eg_dataset_complete_5sec.h5")
+        train_h5_path = os.path.join(path_to_data, args.dataset_name + "_training_" + str(args.random_seed) + ".h5")
+        val_h5_path = os.path.join(path_to_data, args.dataset_name + "_validation_" + str(args.random_seed) + ".h5")
 
         # Load dataset size
         with h5py.File(h5_path, "r") as source:
@@ -220,44 +222,11 @@ if __name__ == "__main__":
 
         logger.info("Dataset size: %s", dataset_size)
 
-        # Generate shuffled indices for train, validation, and test splits
-        # Important: Keep Random seed so that test set stays constant and results are compareable
-        split_dict = split_indices(dataset_size, train_ratio=0.8, val_ratio=0.1, seed=args.random_seed)
-        np.savez(os.path.join(path_to_data, "split_dict_"+str(args.random_seed)+".npz"), **split_dict)
-
-        len_train_set = len(split_dict["train"])    #(we need to know that for determining the number
-                                                    # of update steps for the scheduler)
-
-        # We seperate test, validation and train set
-        with (h5py.File(h5_path, "r") as source):
-            train_indices, val_indices, test_indices = split_dict["train"], split_dict["validation"], \
-                                                       split_dict["test"]
-
-            train_h5_path = os.path.join(path_to_data, args.dataset_name+"_training_"+str(args.random_seed)+".h5")
-            if not os.path.exists(train_h5_path):
-        #         # Create training H5
-                with h5py.File(train_h5_path, "w") as train_file:
-                    for key in source.keys():
-                        train_file.create_dataset(key, data=source[key][train_indices])
-
-            val_h5_path = os.path.join(path_to_data, args.dataset_name + "_validation_" + str(args.random_seed) + ".h5")
-            if not os.path.exists(val_h5_path):
-                # Create validation H5
-                with h5py.File(val_h5_path, "w") as val_file:
-                    for key in source.keys():
-                        val_file.create_dataset(key, data=source[key][val_indices])
-
-            # Optionally create test H5
-            # test_h5_path = os.path.join(path_to_data, args.dataset_name + "_testing_" + str(args.random_seed) + ".h5")
-            # if not os.path.exists(test_h5_path):
-            #
-            #     with h5py.File(test_h5_path, "w") as test_file:
-            #         for key in source.keys():
-            #             test_file.create_dataset(key, data=source[key][test_indices])
-
         # Hack: Ray Tune requires a ray dataset object. However, converting log-mel spectogram formatare not supported
         # So we create a index ray dataset and the actual data-fetching is Wrapped in the
-        train_loader, val_loader, test_loader = create_ray_indexloaders(split_dict) #,num_parallel_tasks=1) #args.cpus_per_trial)
+        train_loader, val_loader= create_ray_indexloader(train_h5_path), create_ray_indexloader(val_h5_path)
+        #,num_parallel_tasks=1) #args.cpus_per_trial)
+
         from utils import SimpleStreamingCollator
         data_collators = {"training": SimpleStreamingCollator(train_h5_path,processor,feature_extractor,tokenizer,
                                                               num_workers=args.cpus_per_trial),
@@ -266,19 +235,18 @@ if __name__ == "__main__":
                           }
 
     else:
-        # pdb.set_trace()
-        train_loader, shard_to_file_train = create_ray_indexloaders(os.path.join(path_to_data,'training'),
+        train_loader, shard_to_file_train = create_ray_indexloaders(os.path.join(path_to_data, args.dataset_name, 'train'),
                                                               batch_size=args.per_device_train_batch_size)
         len_train_set = train_loader.count()
 
-        val_loader, shard_to_file_val = create_ray_indexloaders(os.path.join(path_to_data, 'training'),
+        val_loader, shard_to_file_val = create_ray_indexloaders(os.path.join(path_to_data, args.dataset_name, 'val'),
                                                               batch_size=args.per_device_train_batch_size)
         ray_datasets = {
             "train": train_loader,
             "validation": val_loader,
         }
 
-        from utils import MultiShardStreamingCollator
+        from utils import MultiShardStreamingCollator2
 
         # Create the parallel collator with 4 reader processes
         data_collators = {"training": MultiShardStreamingCollator(shard_to_file_train,processor,feature_extractor,tokenizer,
