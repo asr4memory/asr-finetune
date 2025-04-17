@@ -28,7 +28,7 @@ from utils import  ( list_of_strings, create_ray_indexloaders,
                      save_file, steps_per_epoch )
 
 import h5py
-from utils import split_indices, log_memory_usage
+from utils import log_memory_usage
 
 # laod models
 from transformers import set_seed
@@ -185,7 +185,6 @@ if __name__ == "__main__":
 
     # Count trainable parameters
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-
     logger.info("Trainable Original Parameters: %s", trainable_params)
 
     # Initial memory usage
@@ -208,52 +207,35 @@ if __name__ == "__main__":
     logger.info("Ray Nodes info: %s", ray.nodes())
     logger.info("Ray Cluster Resources: %s", ray.cluster_resources())
 
-
     path_to_data = os.path.join("/scratch/usr/", os.getenv('USER') + "/data") if args.path_to_data is None else args.path_to_data
 
+    h5_path = os.path.join(path_to_data, args.dataset_name + ".h5")  # "eg_dataset_complete_5sec.h5")
+    train_h5_path = os.path.join(path_to_data, args.dataset_name + "_training_" + str(args.random_seed) + ".h5")
+    val_h5_path = os.path.join(path_to_data, args.dataset_name + "_validation_" + str(args.random_seed) + ".h5")
+    # Hack: Ray Tune requires a ray dataset object. However, converting log-mel spectogram formatare not supported
+    # So we create a index ray dataset and the actual data-fetching is Wrapped in the
+    train_loader, val_loader = create_ray_indexloader(train_h5_path), create_ray_indexloader(val_h5_path)
+    dataset_size = train_loader.count()
+    logger.info("Dataset size: %s", dataset_size)
     if args.single_file:
-        h5_path = os.path.join(path_to_data, args.dataset_name + ".h5") #"eg_dataset_complete_5sec.h5")
-        train_h5_path = os.path.join(path_to_data, args.dataset_name + "_training_" + str(args.random_seed) + ".h5")
-        val_h5_path = os.path.join(path_to_data, args.dataset_name + "_validation_" + str(args.random_seed) + ".h5")
-
-        # Load dataset size
-        with h5py.File(h5_path, "r") as source:
-            dataset_size = len(source["audio"])
-
-        logger.info("Dataset size: %s", dataset_size)
-
-        # Hack: Ray Tune requires a ray dataset object. However, converting log-mel spectogram formatare not supported
-        # So we create a index ray dataset and the actual data-fetching is Wrapped in the
-        train_loader, val_loader= create_ray_indexloader(train_h5_path), create_ray_indexloader(val_h5_path)
-        #,num_parallel_tasks=1) #args.cpus_per_trial)
-
         from utils import SimpleStreamingCollator
         data_collators = {"training": SimpleStreamingCollator(train_h5_path,processor,feature_extractor,tokenizer,
                                                               num_workers=args.cpus_per_trial),
                           "validation": SimpleStreamingCollator(val_h5_path,processor,feature_extractor,tokenizer,
                                                               num_workers=args.cpus_per_trial)
                           }
-
     else:
-        train_loader, shard_to_file_train = create_ray_indexloaders(os.path.join(path_to_data, args.dataset_name, 'train'),
-                                                              batch_size=args.per_device_train_batch_size)
-        len_train_set = train_loader.count()
-
-        val_loader, shard_to_file_val = create_ray_indexloaders(os.path.join(path_to_data, args.dataset_name, 'val'),
-                                                              batch_size=args.per_device_train_batch_size)
-        ray_datasets = {
-            "train": train_loader,
-            "validation": val_loader,
-        }
-
-        from utils import MultiShardStreamingCollator2
-
         # Create the parallel collator with 4 reader processes
-        data_collators = {"training": MultiShardStreamingCollator(shard_to_file_train,processor,feature_extractor,tokenizer,
+        data_collators = {"training": MultiStreamingCollator(train_h5_path,processor,feature_extractor,tokenizer,
                                                               num_workers=args.cpus_per_trial),
-                          "validation": MultiShardStreamingCollator(shard_to_file_val,processor,feature_extractor,tokenizer,
+                          "validation": MultiStreamingCollator(val_h5_path,processor,feature_extractor,tokenizer,
                                                               num_workers=args.cpus_per_trial)
                           }
+
+    ray_datasets = {
+        "train": train_loader,
+        "validation": val_loader,
+    }
 
     logger.info('len_train_set: %s', len_train_set)
 

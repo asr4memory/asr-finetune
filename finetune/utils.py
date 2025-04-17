@@ -14,6 +14,14 @@ import json
 import logging
 import re
 
+import h5py
+import ray
+import os
+import multiprocessing
+from multiprocessing import Pool
+import time
+import numpy as np
+import psutil
 logger = logging.getLogger(__name__)
 
 def save_file(file,output_dir,mode='config',file_tag = ''):
@@ -34,7 +42,6 @@ def save_file(file,output_dir,mode='config',file_tag = ''):
         with open(eval_path, 'w') as f:
             json.dump(file, f)
 
-import psutil
 def log_memory_usage(label=""):
     mem = psutil.virtual_memory()
     logging.info(
@@ -86,21 +93,6 @@ def list_of_strings(arg):
     return arg.split(',')
 
 
-def split_indices(dataset_size, train_ratio=0.8, val_ratio=0.1, seed=42):
-    """Generate shuffled indices for dataset splitting."""
-    np.random.seed(seed)
-
-    indices = np.random.permutation(dataset_size)
-
-    train_size = int(train_ratio * dataset_size)
-    val_size = int(val_ratio * dataset_size)
-    test_size = dataset_size - train_size - val_size
-    return {
-        "train": np.sort(indices[:train_size]),
-        "validation": np.sort(indices[train_size:train_size + val_size]),
-        "test": np.sort(indices[train_size + val_size:])
-    }
-
 def create_ray_indexloader(file_path: str):
     """
     Create Ray dataset for a single HDF5 file.
@@ -127,75 +119,8 @@ def create_ray_indexloader(file_path: str):
 
     return dataset
 
-def create_ray_indexloaders(shards_directory: str):
-    """
-    Create Ray dataset with shard information from a directory of .h5 files.
 
-    Args:
-        shards_directory: Path to directory containing .h5 files
-        batch_size: Batch size for processing
-
-    Returns:
-        Tuple of (ray_dataset, shard_to_file_map)
-    """
-    # List all .h5 files in the directory
-    shard_files = [f for f in os.listdir(shards_directory) if f.endswith('.h5')]
-    shard_files.sort()  # Sort for consistent ordering
-
-    # Create mapping from shard_id to file path
-    shard_to_file = {i: os.path.join(shards_directory, filename)
-                     for i, filename in enumerate(shard_files)}
-
-    # Create items with shard information
-    items = []
-    for shard_id, file_path in shard_to_file.items():
-        # Get number of samples in this shard
-        with h5py.File(file_path, 'r') as f:
-            try:
-                num_samples = len(f['audio'])
-            except:
-                num_samples = len(f['audio_waveforms'])
-        num_samples = 128
-        # Create an item for each sample in this shard
-        for idx in range(num_samples):
-            items.append({"idx": idx, "shard_id": shard_id})
-
-    # Create dataset and sort by shard_id for better batching efficiency
-    dataset = ray.data.from_items(items).sort("shard_id")
-
-    return dataset, shard_to_file
-
-import ray
-import os
-
-
-# This needs to be a top-level function for multiprocessing to work properly
-def _process_hdf5_index(hdf5_path, idx):
-    """Process a single index from an HDF5 file"""
-    import h5py
-
-    try:
-        with h5py.File(hdf5_path, 'r') as f:
-            # Get audio with proper dtype
-            audio = np.array(f['audio'][idx], dtype=np.float32).copy()
-
-            # Get transcription
-            transcription = f['transcription'][idx]
-            if isinstance(transcription, bytes):
-                transcription = transcription.decode('utf-8')
-
-        return idx, audio, transcription
-    except Exception as e:
-        print(f"Error processing index {idx}: {e}")
-        return idx, None, None
-
-
-import multiprocessing
-from multiprocessing import Pool
-import time
-import numpy as np
 _shared_hdf5 = None
-import h5py
 
 def _init_worker(hdf5_path):
     global _shared_hdf5
@@ -322,139 +247,6 @@ class HDF5Worker:
             print(f"Error processing idx {idx}: {e}")
             return idx, None, None
 
-
-
-# Revised collator class
-class MultiShardStreamingCollator2:
-    def __init__(self, shard_to_file, processor, feature_extractor, tokenizer, num_workers=None):
-        """
-        Initialize a streaming collator that can handle multiple HDF5 files.
-
-        Args:
-            shard_to_file: Dictionary mapping shard IDs to HDF5 file paths
-            processor: The processor for the model
-            feature_extractor: Feature extractor for audio
-            tokenizer: Tokenizer for transcriptions
-            num_workers: Number of parallel workers per shard
-        """
-        self.shard_to_file = shard_to_file
-        self.processor = processor
-        self.feature_extractor = feature_extractor
-        self.tokenizer = tokenizer
-        self.num_workers = num_workers or 2  # Use a reasonable default
-
-        # Initialize Ray if not already
-        if not ray.is_initialized():
-            ray.init(ignore_reinit_error=True)
-
-        # Create workers per shard
-        self.workers = {}
-
-        # Performance tracking
-        self.batch_times = []
-        self.batch_count = 0
-
-        self.used_shards = set()
-
-    def _get_workers(self, shard_id):
-        """Get or create workers for the given shard ID."""
-        self.used_shards.add(shard_id)
-        # Make shard_id hashable
-        if hasattr(shard_id, 'dtype'):  # Check if it's a numpy array
-            if shard_id.size == 1:
-                shard_id = shard_id.item()
-            else:
-                shard_id = shard_id.flat[0].item()
-
-        if shard_id not in self.workers:
-            # Convert keys in shard_to_file dict if needed
-            converted_shard_to_file = {}
-            for k, v in self.shard_to_file.items():
-                if hasattr(k, 'dtype'):
-                    if k.size == 1:
-                        converted_shard_to_file[k.item()] = v
-                    else:
-                        converted_shard_to_file[k.flat[0].item()] = v
-                else:
-                    converted_shard_to_file[k] = v
-
-            self.shard_to_file = converted_shard_to_file
-
-            if shard_id not in self.shard_to_file:
-                raise ValueError(f"Unknown shard ID: {shard_id}")
-
-            hdf5_path = self.shard_to_file[shard_id]
-            # Pass feature_extractor to each worker
-            self.workers[shard_id] = [HDF5Worker.remote(hdf5_path, self.feature_extractor)
-                                      for _ in range(self.num_workers)]
-
-        return self.workers[shard_id]
-
-    def __call__(self, batch_dict):
-        """Process a batch of indices."""
-        start = time.time()
-        indices = batch_dict['idx']
-
-        # Get shard ID
-        shard_id = batch_dict.get('shard_id', 0)
-        if hasattr(shard_id, 'dtype'):
-            if shard_id.size == 1:
-                shard_id = shard_id.item()
-            else:
-                shard_id = shard_id.flat[0].item()
-
-        # Get workers
-        workers = self._get_workers(shard_id)
-
-        # Distribute work among workers round-robin
-        futures = []
-        for i, idx in enumerate(indices):
-            worker = workers[i % len(workers)]
-            futures.append(worker.process_index_with_features.remote(idx))
-
-        # Get results
-        results = ray.get(futures)
-        valid_results = [(idx, mel_features, trans) for idx, mel_features, trans in results if mel_features is not None]
-
-        if not valid_results:
-            raise RuntimeError(f"No valid data in batch: {indices}")
-
-        _, mel_features_list, transcription_list = zip(*valid_results)
-
-        # Performance logging
-        elapsed = time.time() - start
-        self.batch_times.append(elapsed)
-        self.batch_count += 1
-        if self.batch_count % 5 == 0:
-            avg_time = sum(self.batch_times[-5:]) / 5
-            print(f"[Collator] Batch {self.batch_count}: {avg_time:.2f}s, {len(indices) / avg_time:.2f} samples/sec")
-
-        return self._prepare_dataset(mel_features_list, transcription_list)
-
-    def _prepare_dataset(self, mel_features_list, transcriptions):
-        """Prepare the dataset for the model."""
-        # Same implementation as your original method
-        padded_features = self.feature_extractor.pad(
-            mel_features_list,
-            padding="longest",
-            return_tensors="pt"
-        )
-        input_features = padded_features.input_features
-
-        tokenized_labels = [
-            self.tokenizer(text if isinstance(text, str) else str(text)).input_ids
-            for text in transcriptions
-        ]
-        label_features = [{"input_ids": ids} for ids in tokenized_labels]
-        labels_batch = self.tokenizer.pad(label_features, return_tensors="pt")
-        labels = labels_batch["input_ids"].masked_fill(
-            labels_batch.attention_mask.ne(1), -100
-        )
-        return {"input_features": input_features, "labels": labels}
-
-    def __del__(self):
-        """Clean up resources when the collator is garbage collected."""
-        self.workers = {}  # Ray will automatically clean up the actors
 
 class MultiStreamingCollator:
     def __init__(self, hdf5_path, processor, feature_extractor, tokenizer, num_workers=None):
