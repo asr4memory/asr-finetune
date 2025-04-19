@@ -1,0 +1,9 @@
+2025-04-10 15:32:53,722 - INFO - MEMORY [benchmark_start]: 81.4% - Used: 5.21 GB, Available: 3.19 GB
+2025-04-10 15:33:56,862 - INFO - MEMORY [benchmark_start]: 82.0% - Used: 5.20 GB, Available: 3.09 GB
+2025-04-10 15:35:31,436 - INFO - MEMORY [benchmark_start]: 81.7% - Used: 5.14 GB, Available: 3.14 GB
+2025-04-14 14:42:01,448 - INFO - MEMORY [benchmark_start]: 71.2% - Used: 5.78 GB, Available: 4.95 GB
+2025-04-14 14:44:48,041 - INFO - MEMORY [benchmark_start]: 74.0% - Used: 6.61 GB, Available: 4.46 GB
+2025-04-14 14:44:59,076 - INFO - MEMORY [benchmark_start]: 73.5% - Used: 6.74 GB, Available: 4.56 GB
+2025-04-14 14:47:01,324 - INFO - MEMORY [benchmark_start]: 77.3% - Used: 6.68 GB, Available: 3.90 GB
+2025-04-14 14:47:38,050 - INFO - MEMORY [benchmark_start]: 76.1% - Used: 6.74 GB, Available: 4.11 GB
+2025-04-14 14:48:22,265 - INFO - MEMORY [benchmark_start]: 74.7% - Used: 6.55 GB, Available: 4.34 GB

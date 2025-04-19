@@ -17,7 +17,7 @@ from ray.train.huggingface.transformers import prepare_trainer, RayTrainReportCa
 
 # get models
 from models import get_whisper_models as get_models
-from peft import LoraConfig, prepare_model_for_kbit_training, PeftModel, LoraModel, LoraConfig, get_peft_model
+from peft import LoraConfig, prepare_model_for_kbit_training, PeftModel, LoraModel, AdaLoraConfig, get_peft_model
 import json
 
 # only those hyperparameter which should be optimized
@@ -75,7 +75,6 @@ def make_seq2seq_training_kwargs(args):
 #    ds_config["train_micro_batch_size_per_gpu"] = "auto"
     # Important: Initialize DeepSpeed properly within Ray
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
-    world_size = int(os.environ.get("WORLD_SIZE", 1))
     # Update DeepSpeed config with local_rank
     ds_config["local_rank"] = local_rank
 
@@ -178,6 +177,9 @@ def train_whisper_model(config, training_kwargs=None, data_collators=None):
                                                                 return_timestamps=training_kwargs["return_timestamps"],
                                                                      load_in_8bit=training_kwargs["peft"])
 
+
+    training_kwargs["max_steps"] = steps_per_epoch(training_kwargs["len_train_set"],config["per_device_train_batch_size"]) * training_kwargs["num_train_epochs"]
+
     if training_kwargs["peft"]:
         model = prepare_model_for_kbit_training(model)
         #, output_embedding_layer_name="proj_out") not needed:  https://github.com/Vaibhavs10/fast-whisper-finetuning/issues/6
@@ -190,8 +192,20 @@ def train_whisper_model(config, training_kwargs=None, data_collators=None):
 
         model.model.encoder.conv1.register_forward_hook(make_inputs_require_grad)
         # r=32, lora_alpha=64
-        lora_config = LoraConfig(r=4, lora_alpha=8, target_modules=["q_proj", "v_proj"], lora_dropout=0.05,
-                                 bias="none")
+        # lora_config = LoraConfig(r=config["rank"], lora_alpha=config["alpha"], target_modules=["q_proj", "v_proj"],
+        #               lora_dropout=0.05, rslora=True, bias="none")
+        lora_config = AdaLoraConfig(
+            init_r=config["rank"],  # Initial rank (same as your old LoRA r)
+            target_modules=["q_proj", "v_proj"],
+            lora_alpha=config["alpha"],
+            lora_dropout=0.05,
+            tinit=int(training_kwargs["max_steps"]*0.1),  # Step to start decreasing rank
+            tfinal=int(training_kwargs["max_steps"]*0.8),  # Step to finalize rank pruning
+            deltaT=10,  # Rank update interval
+            beta1=0.85,  # AdaLoRA-specific: Adam beta1
+            beta2=0.95,  # AdaLoRA-specific: Adam beta2
+            orth_reg_weight=0.8,  # Regularization term for low-rank adaptation
+        )
         #, task_type="SEQ_2_SEQ_LM")
         model = get_peft_model(model, lora_config)
         model.to(f"cuda:{local_rank}")
@@ -262,7 +276,6 @@ def train_whisper_model(config, training_kwargs=None, data_collators=None):
 
     log_memory_usage("after_data_load")
 
-    training_kwargs["max_steps"] = steps_per_epoch(training_kwargs["len_train_set"],config["per_device_train_batch_size"]) * training_kwargs["num_train_epochs"]
 
     if training_kwargs["peft"]:
         model.config.use_cache = False
@@ -275,6 +288,8 @@ def train_whisper_model(config, training_kwargs=None, data_collators=None):
     del training_kwargs['num_train_epochs']
     del training_kwargs['prefetch_batches']
     del training_kwargs['peft']
+    del config['alpha']
+    del config['rank']
 
     training_args = Seq2SeqTrainingArguments(
         eval_strategy="steps",

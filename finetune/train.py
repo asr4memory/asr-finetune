@@ -24,11 +24,10 @@ from functools import partial
 import pprint
 import numpy as np
 
-from utils import  ( list_of_strings, create_ray_indexloaders,
-                     save_file, steps_per_epoch )
-
+from utils import list_of_strings, save_file, steps_per_epoch
+from utils import create_ray_indexloader, SimpleStreamingCollator, MultiStreamingCollator
 import h5py
-from utils import split_indices, log_memory_usage
+from utils import log_memory_usage
 
 # laod models
 from transformers import set_seed
@@ -90,6 +89,7 @@ def parse_args():
     parser.add_argument("--target_language", type=str, default="german", help="Target Language")
     parser.add_argument("--return_timestamps", action="store_true", help="Return Timestemps mode for model")
     parser.add_argument("--peft", action="store_true", help="Whether or not to do Parameter Efficient Training")
+    parser.add_argument("--simple", action="store_true", help="Which Collator to use")
     #https://github.com/Vaibhavs10/fast-whisper-finetuning?tab=readme-ov-file#evaluation-and-inference
 
     # Dataset settings
@@ -213,73 +213,38 @@ if __name__ == "__main__":
     #     processor=processor,
     #     decoder_start_token_id=model.config.decoder_start_token_id,
     # )
-    if args.h5:
-        h5_path = os.path.join(path_to_data, args.dataset_name + ".h5") #"eg_dataset_complete_5sec.h5")
-
-        # Load dataset size
-        with h5py.File(h5_path, "r") as source:
-            dataset_size = len(source["audio"])
-
-        logger.info("Dataset size: %s", dataset_size)
-
-        # Generate shuffled indices for train, validation, and test splits
-        # Important: Keep Random seed so that test set stays constant and results are compareable
-        split_dict = split_indices(dataset_size, train_ratio=0.8, val_ratio=0.1, seed=args.random_seed)
-        len_train_set = len(split_dict["train"])    #(we need to know that for determining the number
-                                                    # of update steps for the scheduler)
-
-        # We seperate test, validation and train set
-        with (h5py.File(h5_path, "r") as source):
-            train_indices, val_indices, test_indices = split_dict["train"], split_dict["validation"], \
-                                                       split_dict["test"]
-
-            train_h5_path = os.path.join(path_to_data, args.dataset_name+"_training_"+str(args.random_seed)+".h5")
-            if not os.path.exists(train_h5_path):
-                # Create training H5
-                with h5py.File(train_h5_path, "w") as train_file:
-                    for key in source.keys():
-                        train_file.create_dataset(key, data=source[key][train_indices])
-
-            val_h5_path = os.path.join(path_to_data, args.dataset_name + "_validation_" + str(args.random_seed) + ".h5")
-            if not os.path.exists(val_h5_path):
-                # Create validation H5
-                with h5py.File(val_h5_path, "w") as val_file:
-                    for key in source.keys():
-                        val_file.create_dataset(key, data=source[key][val_indices])
-
-            test_h5_path = os.path.join(path_to_data, args.dataset_name + "_testing_" + str(args.random_seed) + ".h5")
-            if not os.path.exists(test_h5_path):
-                # Optionally create test H5
-                with h5py.File(test_h5_path, "w") as test_file:
-                    for key in source.keys():
-                        test_file.create_dataset(key, data=source[key][test_indices])
-
-
-        # Hack: Ray Tune requires a ray dataset object. However, converting log-mel spectogram formatare not supported
-        # So we create a index ray dataset and the actual data-fetching is Wrapped in the
-        train_loader, val_loader, test_loader = create_ray_indexloaders(split_dict) #,num_parallel_tasks=1) #args.cpus_per_trial)
-
-        ray_datasets = {
-            "train": train_loader,
-            "validation": val_loader,
-        }
-
-        from utils import SimpleStreamingCollator
-
-        # Create the parallel collator with 4 reader processes
-        data_collators = {"training": SimpleStreamingCollator(train_h5_path,processor,feature_extractor,tokenizer,
-                                                              num_workers=args.cpus_per_trial -1),
-                          "validation": SimpleStreamingCollator(val_h5_path,processor,feature_extractor,tokenizer,
-                                                              num_workers=args.cpus_per_trial -1)
-                          }
-
-
-    else:
-        logger.info('This scripts only works with .h5 data!')
-
+    # h5_path = os.path.join(path_to_data, args.dataset_name + ".h5")  # "eg_dataset_complete_5sec.h5")
+    train_h5_path =os.path.join(path_to_data,  args.dataset_name + "_train.h5")
+    val_h5_path =os.path.join(path_to_data, args.dataset_name + "_val.h5")
+    # Hack: Ray Tune requires a ray dataset object. However, converting log-mel spectogram formatare not supported
+    # So we create a index ray dataset and the actual data-fetching is Wrapped in the
+    train_loader, val_loader = create_ray_indexloader(train_h5_path), create_ray_indexloader(val_h5_path)
+    len_train_set = train_loader.count()
+    args.len_train_set = len_train_set
     logger.info('len_train_set: %s', len_train_set)
 
-    args.len_train_set = len_train_set
+    # Set up Ray datasets
+    ray_datasets = {
+        "train": train_loader,
+        "validation": val_loader,
+    }
+
+    if args.simple:
+        data_collators = {
+            "training": SimpleStreamingCollator(train_h5_path, processor, feature_extractor, tokenizer,
+                                                num_workers=args.cpus_per_trial),
+            "validation": SimpleStreamingCollator(val_h5_path, processor, feature_extractor, tokenizer,
+                                                  num_workers=args.cpus_per_trial)
+        }
+    else:
+        # Create the parallel collator with 4 reader processes
+        data_collators = {
+            "training": MultiStreamingCollator(train_h5_path, processor, feature_extractor, tokenizer,
+                                               num_workers=args.cpus_per_trial),
+            "validation": MultiStreamingCollator(val_h5_path, processor, feature_extractor, tokenizer,
+                                                 num_workers=args.cpus_per_trial)
+        }
+
 
     logger.info("Starting Finetuning for model %s", args.model_type)
 
@@ -447,7 +412,7 @@ if __name__ == "__main__":
     """
 
     def get_hyperparameters(args):
-        HYPERPARAMETERS = ['learning_rate', 'warmup_steps', 'weight_decay', 'scheduler']
+        HYPERPARAMETERS = ['learning_rate', 'warmup_steps', 'weight_decay', 'scheduler', 'alpha', 'rank']
         train_loop_config_ = {}
         train_loop_config_["per_device_train_batch_size"] = args.per_device_train_batch_size
         train_loop_config_["warmup_steps"] = 0
@@ -460,6 +425,10 @@ if __name__ == "__main__":
                 train_loop_config_[hyper_param] = tune.loguniform(1e-5, 1e-1)
             elif hyper_param == 'warmup_steps':
                 train_loop_config_[hyper_param] = tune.randint(0, args.max_warmup_steps + 1)
+            elif hyper_param == 'alpha':
+                train_loop_config_[hyper_param] = tune.randint(2, 6)
+            elif hyper_param == 'rank':
+                train_loop_config_[hyper_param] = tune.randint(1, 17)
             elif hyper_param == "weight_decay":
                 train_loop_config_[hyper_param] = tune.uniform(0.0, 0.2)
             elif hyper_param == "scheduler":
