@@ -36,3 +36,10 @@ memory_usage.log
 
 
 finetune/dataloader_test.py
+finetune/ray_custom_pytorch.py
+finetune/ray_custom_claude2.py
+finetune/ray_custom_claude.py
+finetune/ray_custom_dataloader.py
+finetune/dataloader_ray.py
+finetune/benchmark_simple_loader.py
+finetune/benchmark_dataloader_claude

@@ -24,11 +24,11 @@ from functools import partial
 import pprint
 import numpy as np
 
-from utils import  ( list_of_strings, create_ray_indexloaders,
+from utils import  ( list_of_strings, create_ray_indexloader,
                      save_file, steps_per_epoch )
 
+from utils import SimpleStreamingCollator
 import h5py
-from utils import log_memory_usage
 
 # laod models
 from transformers import set_seed
@@ -156,7 +156,7 @@ if __name__ == "__main__":
     2. We define the TorchTrainer for each trial, including the resources (GPUs, CPUs, Workers) per trial
        https://docs.ray.io/en/latest/_modules/ray/train/torch/torch_trainer.html#TorchTrainer
     3. We define the searchers and schedulers (get_searcher_and_scheduler) used to find the optimizal paramters
-    4. We set-up a ray Tuner Object defining the the hyperparameters, and other important Configs 
+    4. We set-up a ray Tuner Object defining the the hyperparameters, and other important Configs
     """
 
     """STEP 1: Data laoding and pre-processing"""
@@ -185,17 +185,18 @@ if __name__ == "__main__":
 
     # Count trainable parameters
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
     logger.info("Trainable Original Parameters: %s", trainable_params)
 
     # Initial memory usage
-    log_memory_usage("before_ray_init")
+#    log_memory_usage("before_ray_init")
     if args.run_on_local_machine:
         args.storage_path = os.path.join(os.getcwd(),"output")
         ray.init()
     else:
         ray.init("auto")
 
-    log_memory_usage("after_ray_init")
+#    log_memory_usage("after_ray_init")
 
     # Could help to connect to head note if connection fails frequently
     #     ip_head = os.getenv("ip_head")
@@ -207,34 +208,27 @@ if __name__ == "__main__":
     logger.info("Ray Nodes info: %s", ray.nodes())
     logger.info("Ray Cluster Resources: %s", ray.cluster_resources())
 
-    path_to_data = os.path.join("/scratch/usr/", os.getenv('USER') + "/data") if args.path_to_data is None else args.path_to_data
 
-    h5_path = os.path.join(path_to_data, args.dataset_name + ".h5")  # "eg_dataset_complete_5sec.h5")
-    train_h5_path = os.path.join(path_to_data, args.dataset_name + "_training_" + str(args.random_seed) + ".h5")
-    val_h5_path = os.path.join(path_to_data, args.dataset_name + "_validation_" + str(args.random_seed) + ".h5")
-    # Hack: Ray Tune requires a ray dataset object. However, converting log-mel spectogram formatare not supported
-    # So we create a index ray dataset and the actual data-fetching is Wrapped in the
+    path_to_data = os.path.join("/scratch/usr/", os.getenv('USER') + "/data/eg_dataset_complete_v3_sharded") if args.path_to_data is None else args.path_to_data
+
+    dataset_name = args.dataset_name
+    train_h5_path = os.path.join(path_to_data, f"{dataset_name}_train.h5")
+    val_h5_path = os.path.join(path_to_data, f"{dataset_name}_val.h5")
+
     train_loader, val_loader = create_ray_indexloader(train_h5_path), create_ray_indexloader(val_h5_path)
-    dataset_size = train_loader.count()
-    logger.info("Dataset size: %s", dataset_size)
-    if args.single_file:
-        from utils import SimpleStreamingCollator
-        data_collators = {"training": SimpleStreamingCollator(train_h5_path,processor,feature_extractor,tokenizer,
-                                                              num_workers=args.cpus_per_trial),
-                          "validation": SimpleStreamingCollator(val_h5_path,processor,feature_extractor,tokenizer,
-                                                              num_workers=args.cpus_per_trial)
-                          }
-    else:
-        # Create the parallel collator with 4 reader processes
-        data_collators = {"training": MultiStreamingCollator(train_h5_path,processor,feature_extractor,tokenizer,
-                                                              num_workers=args.cpus_per_trial),
-                          "validation": MultiStreamingCollator(val_h5_path,processor,feature_extractor,tokenizer,
-                                                              num_workers=args.cpus_per_trial)
-                          }
 
+    dataset_size = train_loader.count()
+    len_train_set = dataset_size
     ray_datasets = {
         "train": train_loader,
         "validation": val_loader,
+    }
+
+
+    # Create the parallel collator with 4 reader processes
+    data_collators = {
+    "training": SimpleStreamingCollator(train_h5_path, feature_extractor, tokenizer, num_workers=args.cpus_per_trial),
+    "validation": SimpleStreamingCollator(val_h5_path, feature_extractor, tokenizer, num_workers=args.cpus_per_trial)
     }
 
     logger.info('len_train_set: %s', len_train_set)
@@ -255,17 +249,17 @@ if __name__ == "__main__":
 
     """STEP 2: Define the Ray Trainer
    
-    Args: 
+    Args:
         train_model (function): the training function to execute on each trial.
-                     The partial wrapper allows for additional arguments (config is required).  
+                     The partial wrapper allows for additional arguments (config is required).
         scaling_config (ScalingConfig): resources_per_worker...defines CPU and GPU requirements used by each worker.
                      num_workers...number of workers used for each trial
                      placement_strategy...how job is distributed across different nodes
-       datasets (dict): Dataset dictionary. Train and eval with ray_dataset objects is required. 
+       datasets (dict): Dataset dictionary. Train and eval with ray_dataset objects is required.
     
     Reference: https://docs.ray.io/en/latest/_modules/ray/train/torch/torch_trainer.html#TorchTrainer
     """
-
+    #args.cpus_per_trial
     resources_per_trial={"CPU": args.cpus_per_trial, "GPU": args.gpus_per_trial}
     trainer = TorchTrainer(
         partial(train_model, training_kwargs=training_kwargs,
@@ -379,18 +373,18 @@ if __name__ == "__main__":
     """Step 4: Set-up a ray Tuner [1]
 
     The Tuner Object takes the trainer, defines the param_space, configures the searcher and scheduler, while observing the
-    checkpointing config (more details below). 
+    checkpointing config (more details below).
 
     If resume_training = True, training is resumed from the previous interrupted training. Important: all the settings needs
     to be the same as the original run. We resume unfinished and errored trials. Terminated trials will not be resumed.
-    Ref: [2] 
+    Ref: [2]
 
     More Details:
         param_space (dict)...defines the hyper-parameter space we search for optimal parameters. Requires a prior distribut.
                              over the hyperparameters. Instances of parameters will be passed to Seq2SeqTrainingArguments.
-                             In principle, every optimial parameter there can be part of the param_space.           
-        tune_config (Tune.Config) ... Config for deciding which metric to use for deifning a good trial (e.g. eval_loss or 
-                                      eval_wer,  number of total trials/hyperparameter set-ups (num_samples), searcher, 
+                             In principle, every optimial parameter there can be part of the param_space.
+        tune_config (Tune.Config) ... Config for deciding which metric to use for deifning a good trial (e.g. eval_loss or
+                                      eval_wer,  number of total trials/hyperparameter set-ups (num_samples), searcher,
                                       scheduler. Reuse_actor optimizes resource usage so that all GPUs are always used.
         run_config (RunConfig): Runtime configuration that is specific to individual trials.
                     num_to_keep...how many checkpoints to keep (more requires more memory)
@@ -399,7 +393,7 @@ if __name__ == "__main__":
 
     References:
         [1] https://docs.ray.io/en/latest/tune/api/doc/ray.tune.Tuner.html
-        [2] https://docs.ray.io/en/latest/tune/tutorials/tune-fault-tolerance.html#tune-fault-tolerance-ref 
+        [2] https://docs.ray.io/en/latest/tune/tutorials/tune-fault-tolerance.html#tune-fault-tolerance-ref
     """
 
     def get_hyperparameters(args):
@@ -416,9 +410,9 @@ if __name__ == "__main__":
                 train_loop_config_[hyper_param] = tune.loguniform(1e-6, 5e-4)
             elif hyper_param == 'warmup_steps':
                 train_loop_config_[hyper_param] = tune.randint(0, args.max_warmup_steps + 1)
-            elif hyper_param == "weight_decay":
+            elif hyper_param == 'weight_decay':
                 train_loop_config_[hyper_param] = tune.uniform(0.0, 0.2)
-            elif hyper_param == "scheduler":
+            elif hyper_param == 'scheduler':
                 # Options: add more if you want!
                 # LINEAR = "linear"
                 # COSINE = "cosine"
@@ -426,7 +420,7 @@ if __name__ == "__main__":
                 # POLYNOMIAL = "polynomial"
                 # CONSTANT = "constant"
                 # CONSTANT_WITH_WARMUP = "constant_with_warmup"
-                train_loop_config_[hyper_param] = tune.choice(["linear","cosine","cosine_with_restarts","polynomial"])
+                train_loop_config_["lr_scheduler_type"] = tune.choice(["linear","cosine","cosine_with_restarts","polynomial"])
             elif hyper_param == "label_smoothing_factor":
                 train_loop_config_[hyper_param] = tune.uniform(0.0, 0.2)
 
