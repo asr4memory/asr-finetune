@@ -372,7 +372,6 @@ def test_dataloader(config, training_kwargs=None, data_collator=None):
         # tokenizer=tokenizer,  we don't need this as we do the pre-processing before
     )
 
-
     trainer.add_callback(RayTrainReportCallback())
     trainer = prepare_trainer(trainer)
     trainer.train()

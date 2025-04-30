@@ -248,7 +248,6 @@ if __name__ == "__main__":
     training_kwargs = make_training_kwargs(args)
 
     """STEP 2: Define the Ray Trainer
-   
     Args:
         train_model (function): the training function to execute on each trial.
                      The partial wrapper allows for additional arguments (config is required).

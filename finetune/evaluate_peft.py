@@ -324,8 +324,8 @@ def eval_model(args = None, data_collators = None, test_set = None):
 
         wer = 100 * metric.compute(predictions=pred_str, references=label_str)
 
-        logger.info("Original: %s", label_str)
-        logger.info("Model prediction: %s", pred_str)
+        # logger.info("Original: %s", label_str)
+        # logger.info("Model prediction: %s", pred_str)
         return {"wer": wer, "original": label_str, "predictions": pred_str}
 
     model.eval().to(device)  # eval mode for model pushed to device
@@ -374,6 +374,8 @@ def eval_model(args = None, data_collators = None, test_set = None):
 
                 # Log progress every 10 steps
                 if count % 50 == 0:
+                    logger.info("Original: %s", outputs["original"])
+                    logger.info("Model prediction: %s", outputs["predictions"])
                     logger.info(f'WER for step {count}: {outputs["wer"]}')
 
                 # Save checkpoint every 50 steps

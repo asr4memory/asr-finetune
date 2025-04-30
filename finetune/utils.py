@@ -26,6 +26,9 @@ import os
 import shutil
 logger = logging.getLogger(__name__)
 
+def load_and_prepare_data_from_folders(a):
+    return a
+
 def save_file(file,output_dir,mode='config',file_tag = ''):
     """Saves {config,eval_results} files.
 
@@ -112,7 +115,7 @@ def create_ray_indexloader(file_path: str):
         except:
             num_samples = len(f['audio_waveforms'])
 
-    num_samples = 128
+    num_samples = 30
     # Create items with indices
     items = [{"idx": idx} for idx in range(num_samples)]
 
@@ -267,10 +270,24 @@ class SimpleStreamingCollator:
 
         return {"input_features": input_features, "labels": labels}
 
-    def __del__(self):
+    def cleanup(self):
+        """Explicitly clean up resources - call this before exiting."""
         if hasattr(self, 'pool') and self.pool is not None:
             self.pool.close()
             self.pool.join()
+            self.pool = None
 
-        if hasattr(self, 'h5file') and self.h5file is not None:
-            self.h5file.close()
+    def __del__(self):
+        # Still have a __del__ as a fallback, but make it safe
+        try:
+            self.cleanup()
+        except Exception:
+            pass
+
+    # def __del__(self):
+    #     if hasattr(self, 'pool') and self.pool is not None:
+    #         self.pool.close()
+    #         self.pool.join()
+    #
+    #     if hasattr(self, 'h5file') and self.h5file is not None:
+    #         self.h5file.close()
