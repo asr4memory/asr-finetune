@@ -210,7 +210,10 @@ class SimpleStreamingCollator:
             for text in transcriptions
         ]
         label_features = [{"input_ids": ids} for ids in tokenized_labels]
-        labels_batch = self.tokenizer.pad(label_features, return_tensors="pt")
+        labels_batch = self.tokenizer.pad(label_features,
+                                          padding="max_length",
+                                          max_length=448,
+                                          return_tensors="pt")
         labels = labels_batch["input_ids"].masked_fill(
             labels_batch.attention_mask.ne(1), -100
         )

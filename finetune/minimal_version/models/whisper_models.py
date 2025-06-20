@@ -6,7 +6,7 @@ from transformers import WhisperProcessor
 from transformers import WhisperForConditionalGeneration
 import os
 
-def get_whisper_models(model_type,target_language,return_timestamps=False, load_in_8bit=False):
+def get_whisper_models_from_dir(model_type,target_language,return_timestamps=False, load_in_8bit=False):
     """Loads Features Extractor, Tokenizer, Processecor and Model.
 
     Ray requires to load the model and datasets within the train_model function. Therefore, such a function for loading
@@ -21,8 +21,9 @@ def get_whisper_models(model_type,target_language,return_timestamps=False, load_
        tokenizer (WhisperTokenizer): loaded Whiseper Tokenizer Object
        processor (WhisperProcessor): Loaded Whisper Processor Object
     """
+    # TODO: allow model path specification
     model_dir = os.path.join("/scratch/usr/",os.getenv('USER')+"/models/whisper-large-v3")
-    model_dir = r"/Users/chrvt/Documents/GitHub/asr-finetune/data_example/models/whisper-large-v3"
+    model_dir = r"/data_example/models/whisper-large-v3"
     feature_extractor = WhisperFeatureExtractor.from_pretrained(f"{model_dir}/feature_extractor", local_files_only=True,load_in_8bit=load_in_8bit)
     tokenizer = WhisperTokenizer.from_pretrained(f"{model_dir}/tokenizer", local_files_only=True, language=target_language, task="transcribe")
     processor = WhisperProcessor.from_pretrained(f"{model_dir}/processor", local_files_only=True, language=target_language, task="transcribe")
@@ -66,3 +67,23 @@ def get_whisper_models_local(model_type,target_language,return_timestamps=False,
 
     return model, feature_extractor, tokenizer, processor
 
+def get_whisper_models(model_type,
+                       target_language,
+                       return_timestamps=False,
+                       load_in_8bit=False,
+                       local=False
+                       ):
+
+    if local:
+        model, feature_extractor, tokenizer, processor = get_whisper_models_local(model_type,
+                                                                                  target_language,
+                                                                                  return_timestamps=return_timestamps,
+                                                                                  load_in_8bit=load_in_8bit,
+                                                                                  )
+    else:
+        model, feature_extractor, tokenizer, processor = get_whisper_models_from_dir(model_type,
+                                                                                  target_language,
+                                                                                  return_timestamps=return_timestamps,
+                                                                                  load_in_8bit=load_in_8bit,
+                                                                                  )
+    return model, feature_extractor, tokenizer, processor

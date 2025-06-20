@@ -68,7 +68,7 @@ files are automaticall stored in [/scratch/USERNAME/tmp](/scratch/USERNAME/tmp)
 
 # Monitor jobs: Tensorboard and Ray Dashboard
 
-1. To track the progress of your experiments, log into you HPC account forwarding port 6007 onto you local machine through
+1.[train_single_model.py](finetune%2Ftrain_single_model.py) To track the progress of your experiments, log into you HPC account forwarding port 6007 onto you local machine through
 `ssh -L 16006:127.0.0.1:6007 USER@blogin2.nhr.zib.de`  (if you used `blogin2` as login node).
 
 Run `tensorboard --logdir /scratch/src/$USER/ray_results/output_tag/ --bind_all` where output_tag is again the one from
