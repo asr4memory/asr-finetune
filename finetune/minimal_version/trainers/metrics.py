@@ -1,20 +1,50 @@
+"""
+Metric Loader and Evaluator
+
+This module defines a utility for loading and computing evaluation metrics
+(such as WER – Word Error Rate) for Whisper ASR fine-tuning tasks. It ensures
+normalized evaluation output and supports fallback loading from local directories.
+
+Dependencies:
+- HuggingFace `evaluate` package
+- Local `wer.py` file containing the metric definition
+- A tokenizer that can decode predictions and labels
+
+Returns:
+- A `compute_metrics` function usable in HuggingFace training loops.
+"""
 import evaluate
 from utils import normalize
+from pathlib import Path
+import os
+import sys
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+from projects_paths import TRAINERS_PATH
+
 # Define metric for evaluation
 
 def get_metric_to_optimize(which_metric, tokenizer = None):
+    """
+    Returns a compute_metrics function based on the selected evaluation metric.
 
+    Args:
+        which_metric (str): Currently supports only "wer" (Word Error Rate)
+        tokenizer (transformers.PreTrainedTokenizer): Required to decode predictions
+
+    Returns:
+        compute_metrics (Callable): A function to compute evaluation metrics
+    """
     if which_metric == "wer":
+        # Attempt to load WER metric from local project directory
         try:
-            print("trying to get wer")
-            metric = evaluate.load("wer")
+            metric = evaluate.load(os.path.join(TRAINERS_PATH,"wer.py"))
         except Exception as e:
             print(f"Evaluate.load failed: {e}"
                   f"Trying to load wer metric locally", flush=True)
             try:
                 metric = evaluate.load("wer.py")
             except Exception as e:
-                print(f"Save the 'wer.py'. Please ensure it exists in the trainers dir: {e}", flush=True)
+                print(f"Save the wer.py in the trainers dir: {e}", flush=True)
 
         def compute_metrics(pred):
             """Performance Metric calculator, here: Word Error Rate (WER)
@@ -42,4 +72,7 @@ def get_metric_to_optimize(which_metric, tokenizer = None):
 
             return {"wer": wer}
 
-    return compute_metrics
+        return compute_metrics
+    
+    else:
+        raise ValueError(f"Unsupported metric: {which_metric}")

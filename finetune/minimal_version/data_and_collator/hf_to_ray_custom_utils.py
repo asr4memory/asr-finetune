@@ -1,3 +1,14 @@
+"""
+Ray ↔ Hugging Face Transformers Integration Utilities
+
+This module provides classes and utilities to integrate Hugging Face's `Trainer` API
+with Ray Train for distributed hyperparameter tuning and evaluation.
+
+Features:
+- RayTrainReportCallback: Reports Hugging Face checkpoints + metrics to Ray Tune
+- RayTorchIterableDataset: Adapts Ray datasets to PyTorch IterableDatasets
+- prepare_trainer_custom: Modifies a Hugging Face Trainer for Ray-compatible data loaders
+"""
 import logging
 import shutil
 from pathlib import Path
@@ -95,7 +106,11 @@ class RayTrainReportCallback(TrainerCallback):
 
 
 class RayTorchIterableDataset(IterableDataset):
-    """Wrapper class for ray data iterables."""
+    """
+    Wraps a Ray dataset iterator as a PyTorch-compatible IterableDataset.
+
+    Used to convert Ray's streaming datasets into PyTorch DataLoader-compatible format.
+    """
 
     def __init__(self, data_iterable) -> None:
         super().__init__()
@@ -108,12 +123,15 @@ class RayTorchIterableDataset(IterableDataset):
 
 @PublicAPI(stability="beta")
 def prepare_trainer_custom(trainer: "Trainer") -> "Trainer":
-    """Prepare your HuggingFace Transformer Trainer for Ray Train.
+    """
+    Prepares a Hugging Face Trainer for use with Ray streaming datasets.
 
-    This utility function enable the trainer integrates with Ray Data Integration.
-    Internally, it overrides the `get_train_dataloader` and `get_eval_dataloader`
-    methods and inject the data integration logics if the `train_dataset` and
-    `eval_dataset` are Ray Data Iterables.
+    If `train_dataset` or `eval_dataset` are Ray `IterableDataset`s, this function
+    overrides the `get_train_dataloader()` and `get_eval_dataloader()` methods
+    to return Ray-compatible PyTorch DataLoaders.
+
+    Returns:
+        Trainer: Modified Trainer instance with Ray-compatible data handling.
     """
 
     if TRANSFORMERS_IMPORT_ERROR is not None:
@@ -122,7 +140,11 @@ def prepare_trainer_custom(trainer: "Trainer") -> "Trainer":
     base_trainer_class: Type[transformers.trainer.Trainer] = trainer.__class__
 
     class RayTransformersTrainer(base_trainer_class):
-        """A Wrapper of `transformers.Trainer` for Ray Data Integration."""
+        """
+        A subclass of Hugging Face's Trainer that supports Ray Datasets.
+
+        It overrides dataloader methods to support streaming input from Ray datasets.
+        """
 
         def get_train_dataloader(self) -> DataLoader:
             if isinstance(self.train_dataset, _IterableFromIterator):
@@ -141,7 +163,7 @@ def prepare_trainer_custom(trainer: "Trainer") -> "Trainer":
             print(f"self.prefetch_batches {self.prefetch_batches}")
             print(f"per_device_eval_batch_size, {self.args.per_device_eval_batch_size}")
             subsampled = self.eval_dataset.random_sample(self.eval_sample_fraction)
-
+            
             eval_dataset_iter = subsampled.iter_torch_batches(
                 prefetch_batches=self.prefetch_batches,
                 batch_size=self.args.per_device_eval_batch_size, collate_fn=self.eval_collator)

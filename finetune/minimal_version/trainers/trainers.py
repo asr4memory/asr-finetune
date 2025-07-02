@@ -1,11 +1,43 @@
-"""Collection of different trainers and corresponding training Arguments.
 """
+Module: trainers.py
+
+This module provides utilities for training Whisper ASR models using Hugging Face Transformers and Ray Tune.
+It supports both standard training and parameter-efficient fine-tuning (PEFT) techniques such as LoRA and AdaLoRA.
+
+Key Features:
+-------------
+- Supports full and PEFT-based fine-tuning of Whisper models.
+- Integrates with Ray Tune for scalable hyperparameter search.
+- Handles model checkpointing, evaluation sampling, and distributed training.
+- Custom trainer classes for evaluation with WER weighting and eval-set sub-sampling.
+- Compatible with Ray Datasets and Hugging Face Seq2SeqTrainer.
+
+Main Functions:
+---------------
+- `train_whisper_model(...)`:
+    Standard training loop using Hugging Face Transformers (no PEFT).
+
+- `train_whisper_peft_model(...)`:
+    Training loop with PEFT support (e.g., AdaLoRA), including gradient hooks and LoRA rank scheduling.
+
+Notes:
+------
+- Assumes pre-tokenized and preprocessed datasets.
+- Identity collator is used for efficiency since input is already collated.
+
+Dependencies:
+-------------
+- Hugging Face Transformers
+- Ray (Tune, Train, Datasets)
+- PEFT (LoRA/AdaLoRA)
+"""
+
 import os
 import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 import random
-from typing import Optional, List
+from typing import Optional, List, Union, Dict, Any, Tuple
 
 # ray
 import ray
@@ -35,6 +67,58 @@ from utils import  steps_per_epoch, normalize
 from transformers.trainer_utils import EvalLoopOutput
 
 class Seq2SeqTrainerEvalSampling(Seq2SeqTrainer):
+    """
+    Custom Hugging Face Seq2SeqTrainer class that supports:
+    - Evaluating on a random subset of the evaluation dataset.
+    - Weighted combination of loss and Word Error Rate (WER) as a custom metric.
+    
+    Args:
+        eval_sample_fraction (float): Fraction of evaluation dataset to sample (between 0 and 1).
+        prefetch_batches (int): Number of batches to prefetch for dataloader performance.
+        eval_collator (Callable): Collation function used during evaluation.
+        wer_weight (float): Weight given to the WER metric in combined loss.
+    """
+    def __init__(self, *args, eval_sample_fraction=0.1, prefetch_batches = 1, eval_collator=None, wer_weight=1.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        print("AAAAAAAAAAAAAAA")
+        self.prefetch_batches = prefetch_batches
+        self.eval_sample_fraction = eval_sample_fraction
+        self.eval_collator = eval_collator
+        self.wer_weight = wer_weight
+
+    def evaluate(
+        self,
+        eval_dataset: Optional[Dataset] = None,
+        ignore_keys: Optional[List[str]] = None,
+        metric_key_prefix: str = "eval",
+        max_length: Optional[int] = None,
+        num_beams: Optional[int] = None,
+    ) -> Dict[str, float]:
+        """
+        Run evaluation and return metrics, optionally computing a custom eval_loss_wer.
+        """
+        print("I AM HERE!")
+        self._max_length = max_length if max_length is not None else self.args.generation_max_length
+        self._num_beams = num_beams if num_beams is not None else self.args.generation_num_beams
+        metrics = super().evaluate(eval_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix)
+        
+        if "eval_loss" in metrics and "eval_wer" in metrics:
+            beta = self.wer_weight
+            alpha = 1 - beta
+            metrics["eval_loss_wer"] = alpha * metrics["eval_loss"] + beta * metrics["eval_wer"]
+            
+        print("eval_loss_wer", metrics["eval_loss_wer"])
+        
+        self.control = self.callback_handler.on_evaluate(self.args, self.state, self.control, metrics)
+        self.log(metrics)
+        
+        return metrics
+        
+
+import torch
+import torch.nn as nn
+
+class Seq2SeqTrainerEvalSamplingPeft(Seq2SeqTrainer):
 
     def __init__(self, *args, eval_sample_fraction=0.1, prefetch_batches = 1, eval_collator=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -42,78 +126,247 @@ class Seq2SeqTrainerEvalSampling(Seq2SeqTrainer):
         self.prefetch_batches = prefetch_batches
         self.eval_sample_fraction = eval_sample_fraction
         self.eval_collator = eval_collator
+        
+    def prediction_step(
+        self,
+        model: nn.Module,
+        inputs: Dict[str, Union[torch.Tensor, Any]],
+        prediction_loss_only: bool,
+        ignore_keys: Optional[List[str]] = None,
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
+        """
+        Perform an evaluation step on :obj:`model` using obj:`inputs`.
 
+        Subclass and override to inject custom behavior.
 
-#    def get_eval_dataloader(self, eval_dataset: Optional[Dataset] = None) -> DataLoader:
-#        '''
-#        Samples the evaluation dataset and returns a subset
-#        of size self.eval_sample_size.
-#        '''
-#        print("GET EVAL DATALOADER!!!!!!!!!!!!!")
-##        if eval_dataset is None and self.eval_dataset is None:
-#        if eval_dataset is not None:
-#            raise ValueError("Trainer: evaluation requires an eval_dataset.")
+        Args:
+            model (:obj:`nn.Module`):
+                The model to evaluate.
+            inputs (:obj:`Dict[str, Union[torch.Tensor, Any]]`):
+                The inputs and targets of the model.
+
+                The dictionary will be unpacked before being fed to the model. Most models expect the targets under the
+                argument :obj:`labels`. Check your model's documentation for all accepted arguments.
+            prediction_loss_only (:obj:`bool`):
+                Whether or not to return the loss only.
+            ignore_keys (:obj:`Lst[str]`, `optional`):
+                A list of keys in the output of your model (if it is a dictionary) that should be ignored when
+                gathering predictions.
+
+        Return:
+            Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]: A tuple with the loss,
+            logits and labels (each being optional).
+        """
+        has_labels = all(inputs.get(k) is not None for k in self.label_names)
+        inputs = self._prepare_inputs(inputs)
+        if ignore_keys is None:
+            if hasattr(self.model, "config"):
+                ignore_keys = getattr(self.model.config, "keys_to_ignore_at_inference", [])
+            else:
+                ignore_keys = []
+
+        # labels may be popped when computing the loss (label smoothing for instance) so we grab them first.
+        if has_labels:
+            labels = nested_detach(tuple(inputs.get(name) for name in self.label_names))
+            if len(labels) == 1:
+                labels = labels[0]
+        else:
+            labels = None
+
+        with torch.no_grad():
+            forced_decoder_ids=forced_decoder_ids
+            
+            print("where are we?")
+            if is_sagemaker_mp_enabled():
+                print("A")
+                raw_outputs = smp_forward_only(model, inputs)
+                if has_labels:
+                    print("Aa")
+                    if isinstance(raw_outputs, dict):
+                        loss_mb = raw_outputs["loss"]
+                        logits_mb = tuple(v for k, v in raw_outputs.items() if k not in ignore_keys + ["loss"])
+                    else:
+                        loss_mb = raw_outputs[0]
+                        logits_mb = raw_outputs[1:]
+
+                    loss = loss_mb.reduce_mean().detach().cpu()
+                    logits = smp_nested_concat(logits_mb)
+                else:
+                    print("Ab")
+                    loss = None
+                    if isinstance(raw_outputs, dict):
+                        logits_mb = tuple(v for k, v in raw_outputs.items() if k not in ignore_keys)
+                    else:
+                        logits_mb = raw_outputs
+                    logits = smp_nested_concat(logits_mb)
+            else:
+                print("B")
+                if has_labels:
+                    print("Ba")
+                    if self.use_amp:
+                        with autocast():
+                            loss, outputs = self.compute_loss(model, inputs, return_outputs=True, eval=True)
+                    else:
+                        loss, outputs = self.compute_loss(model, inputs, return_outputs=True, eval=True)
+                    loss = loss.mean().detach()
+                    if isinstance(outputs, dict):
+                        logits = tuple(v for k, v in outputs.items() if k not in ignore_keys + ["loss"])
+                    else:
+                        logits = outputs[1:]
+                else:
+                    print("Bb")
+                    loss = None
+                    if self.use_amp:
+                        with autocast():
+                            outputs = model(**inputs)
+                    else:
+                        outputs = model(**inputs)
+                    if isinstance(outputs, dict):
+                        logits = tuple(v for k, v in outputs.items() if k not in ignore_keys)
+                    else:
+                        logits = outputs
+                    # TODO: this needs to be fixed and made cleaner later.
+                    if self.args.past_index >= 0:
+                        self._past = outputs[self.args.past_index - 1]
+
+        if prediction_loss_only:
+            return (loss, None, None)
+
+        logits = nested_detach(logits)
+        if len(logits) == 1:
+            logits = logits[0]
+
+        return (loss, logits, labels)
+
+    def prediction_step(
+        self,
+        model: nn.Module,
+        inputs: Dict[str, Union[torch.Tensor, Any]],
+        prediction_loss_only: bool,
+        ignore_keys: Optional[List[str]] = None,
+    ) -> Tuple[Optional[float], Optional[torch.Tensor], Optional[torch.Tensor]]:
+        """
+        Perform an evaluation step on :obj:`model` using obj:`inputs`.
+
+        Subclass and override to inject custom behavior.
+
+        Args:
+            model (:obj:`nn.Module`):
+                The model to evaluate.
+            inputs (:obj:`Dict[str, Union[torch.Tensor, Any]]`):
+                The inputs and targets of the model.
+
+                The dictionary will be unpacked before being fed to the model. Most models expect the targets under the
+                argument :obj:`labels`. Check your model's documentation for all accepted arguments.
+            prediction_loss_only (:obj:`bool`):
+                Whether or not to return the loss only.
+
+        Return:
+            Tuple[Optional[float], Optional[torch.Tensor], Optional[torch.Tensor]]: A tuple with the loss, logits and
+            labels (each being optional).
+        """
+        print("I AM HERE!!!")
+
+        if not self.args.predict_with_generate or prediction_loss_only:
+            return super().prediction_step(
+                model, inputs, prediction_loss_only=prediction_loss_only, ignore_keys=ignore_keys
+            )
+
+        has_labels = "labels" in inputs
+        inputs = self._prepare_inputs(inputs)
+
+        # XXX: adapt synced_gpus for fairscale as well
+        gen_kwargs = {
+            "max_length": self._max_length if self._max_length is not None else self.model.config.max_length,
+            "num_beams": self._num_beams if self._num_beams is not None else self.model.config.num_beams,
+            "synced_gpus": True if is_deepspeed_zero3_enabled() else False,
+        }
+
+        if self.tokenizer is not None:
+            generation_inputs = {k: v for k, v in inputs.items() if k in self.tokenizer.model_input_names}
+            # very ugly hack to make it work
+            generation_inputs["input_ids"] = generation_inputs.pop(self.tokenizer.model_input_names[0])
+        else:
+            generation_inputs = inputs["input_ids"]
+
+        generated_tokens = self.model.generate(
+            **generation_inputs,
+            **gen_kwargs,
+        )
+        # in case the batch is shorter than max length, the output should be padded
+        if generated_tokens.shape[-1] < gen_kwargs["max_length"]:
+            generated_tokens = self._pad_tensors_to_max_len(generated_tokens, gen_kwargs["max_length"])
+
+        with torch.no_grad():
+            if self.use_amp:
+                print("use amp")
+                with autocast():
+                    forced_decoder_ids = [(1, 50261), (2, 50360), (3, 50364)]
+                    outputs = model(**inputs,forced_decoder_ids=forced_decoder_ids)
+#                    outputs = model(**inputs)
+            else:
+                print("no use amp")
+                forced_decoder_ids = [(1, 50261), (2, 50360), (3, 50364)]
+                outputs = model(**inputs,forced_decoder_ids=forced_decoder_ids)
+#                outputs = model(**inputs)
+            if has_labels:
+                if self.label_smoother is not None:
+                    loss = self.label_smoother(outputs, inputs["labels"]).mean().detach()
+                else:
+                    loss = (outputs["loss"] if isinstance(outputs, dict) else outputs[0]).mean().detach()
+            else:
+                loss = None
+
+        if self.args.prediction_loss_only:
+            return (loss, None, None)
+
+        labels = inputs["labels"]
+        if labels.shape[-1] < gen_kwargs["max_length"]:
+            labels = self._pad_tensors_to_max_len(labels, gen_kwargs["max_length"])
+
+        return (loss, generated_tokens, labels)
+        
+        
+#    def compute_loss(self, model, inputs, return_outputs=False, eval=False):
+#        """
+#        How the loss is computed by Trainer. By default, all models return the loss in the first element.
+#
+#        Subclass and override for custom behavior.
+#        """
+#        if self.label_smoother is not None and "labels" in inputs:
+#            labels = inputs.pop("labels")
 #        else:
-#            print("eval_dataset",eval_dataset)
+#            labels = None
+#        
+#        if eval:
+#            forced_decoder_ids = [(1, 50261), (2, 50360), (3, 50364)]
+#            outputs = model(**inputs,forced_decoder_ids=forced_decoder_ids)
+#        else:
+#            outputs = model(**inputs)
+#            
+#        # Save past state if it exists
+#        # TODO: this needs to be fixed and made cleaner later.
+#        if self.args.past_index >= 0:
+#            self._past = outputs[self.args.past_index]
 #
-#        dataset = eval_dataset.dataset
-#        eval_dataset = dataset if eval_dataset is not None else self.eval_dataset
+#        if labels is not None:
+#            loss = self.label_smoother(outputs, labels)
+#        else:
+#            # We don't use .loss here since the model may return tuples instead of ModelOutput.
+#            loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
 #
-#        try:
-#            idxs = random.sample(range(1000), self.eval_sample_size)
-#            eval_subset = eval_dataset.select(idxs)
-#            print("Subsampled eval dataset.")
-#        except Exception as e:
-#            print(f"Subsampling unsuccsefull, using full eval set instead: {e}", flush=True)
-#            eval_subset = eval_dataset
-#
-#
-#        if isinstance(eval_subset, torch.utils.data.IterableDataset):
-#            if self.args.world_size > 1:
-#                eval_dataset = IterableDatasetShard(
-#                    eval_subset,
-#                    batch_size=self.args.eval_batch_size,
-#                    drop_last=self.args.dataloader_drop_last,
-#                    num_processes=self.args.world_size,
-#                    process_index=self.args.process_index,
-#                )
-#            return DataLoader(
-#                eval_dataset,
-#                batch_size=self.args.eval_batch_size,
-#                collate_fn=self.data_collator,
-#                num_workers=self.args.dataloader_num_workers,
-#                pin_memory=self.args.dataloader_pin_memory,
-#            )
-#
-#        eval_sampler = self._get_eval_sampler(eval_subset)
-#
-#        return DataLoader(
-#            eval_subset,
-#            sampler=eval_sampler,
-#            batch_size=self.args.eval_batch_size,
-#            collate_fn=self.data_collator,
-#            drop_last=self.args.dataloader_drop_last,
-#            num_workers=self.args.dataloader_num_workers,
-#            pin_memory=self.args.dataloader_pin_memory,
-#        )
-
+#        return (loss, outputs) if return_outputs else loss
 
 # only those hyperparameter which should be optimized
 def make_seq2seq_training_kwargs(args):
-    """Training Arguments Filter for the train_model function.
-
-    This is not stricly required as we can also pass args into the train_model. However, it serves as an overview of the
-    relevant training arguments for the Seq2Seq Trainer:
-    https://huggingface.co/docs/transformers/main_classes/trainer#transformers.Seq2SeqTrainingArguments
-
-    In addition to the provided args, we set some default values based on the original Whisper Hyperparameters:
-    https://cdn.openai.com/papers/whisper.pdf, in particular the beta1 and beta 2 values of the AdamW optimizer (which
-    is the default optimzier) differ to the default parameters.
+    """
+    Generate training arguments for Hugging Face Seq2SeqTrainer, based on Whisper defaults and Ray Tune configuration.
 
     Args:
-        args (dict): dictionary of keyboard arguments
+        args (Namespace): Arguments from CLI or Ray Tune trial config.
+    
     Returns:
-       training_kwargs (dict): dictionary of relevant training arguments
+        dict: Filtered and properly formatted training arguments.
     """
 
     #    # Load DeepSpeed config as a dictionary
@@ -178,6 +431,7 @@ def make_seq2seq_training_kwargs(args):
         "per_device_eval_batch_size": args.per_device_eval_batch_size,
         "dataloader_num_workers": args.dataloader_num_workers,
         "run_on_local_machine": args.run_on_local_machine,
+        "wer_weight": args.wer_weight,
         # PEFT STUFF
         "peft": args.peft,
         "remove_unused_columns": False if args.peft else True,
@@ -192,30 +446,22 @@ def make_seq2seq_training_kwargs(args):
 
 
 def train_whisper_peft_model(config, training_kwargs=None, data_collators=None, eval_sample_fraction=1.0):
-    """Main training function for one specific Hyper Parameter configuration.
+    """
+    Main training function for Whisper model using PEFT (e.g. LoRA or AdaLoRA) and Ray Tune.
 
-    Each ray-worker (each hyperparameter configuration) executes this function. The training data needs to be in a ray
-    training iter object which requires a data_collator. However, since we already collated the data in the pre-
-    processing (see DataCollatorSpeechSeq2SeqWithPadding), we simply use the identity as collator.
-
-    The reporting and logging is done by ray tune automatically. To adopt this function for another fine-tuning project,
-    follow similar steps:
-    1. define the required models
-    2. define the evaluation metric
-    3. load the data into ray tune iter
-    4. define trainer Instance (here: Seq2SeqTrainer)
-    5. End with:
-        trainer.add_callback(RayTrainReportCallback())
-        trainer = prepare_trainer(trainer)
-        trainer.train()
-
-    Requires:
-       get_models (function): A function loading the necessary models for training and evaluation
-       compute_metrics (function): A function which computes the metrics (WER in our case)
+    This function is meant to be run inside a Ray Tune trial, performing the following:
+        1. Load the Whisper model and tokenizer (optionally quantized).
+        2. Apply LoRA or AdaLoRA PEFT configuration.
+        3. Load model checkpoint (if resuming).
+        4. Load datasets (Ray Data shards or fallback to HF utils).
+        5. Configure and instantiate HuggingFace Trainer.
+        6. Start training and report progress via Ray.
 
     Args:
-       config (tune.TuneConfig): Config File with Hyperparameter instances (automaticall generated by ray)
-       training_kwargs (dict): Dictionary of training arguments for the Hugging Face Seq2SeqTrainer
+        config (dict): Hyperparameter configuration for Ray Tune (e.g., alpha, rank).
+        training_kwargs (dict): Trainer and model-specific kwargs such as output_dir, batch sizes, etc.
+        data_collators (dict): Dictionary containing "train" and "val" collators for Ray Datasets.
+        eval_sample_fraction (float): Fraction (0 < x <= 1.0) of eval dataset to use during evaluation.
     """
     # log_memory_usage("worker_start")
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
@@ -223,7 +469,8 @@ def train_whisper_peft_model(config, training_kwargs=None, data_collators=None, 
     resume_from_checkpoint = None
 
     ###############################################################
-    ####LOAD MODELS############# ##################################
+    # 1. LOAD & PREPARE MODEL
+    ###############################################################
 
     model, feature_extractor, tokenizer, processor = get_whisper_models(training_kwargs["model_type"],
                                           training_kwargs["target_language"],
@@ -232,22 +479,23 @@ def train_whisper_peft_model(config, training_kwargs=None, data_collators=None, 
                                           local = training_kwargs["run_on_local_machine"]
                                           )
 
-
+    # Prepare model for 8-bit LoRA-style training
     model = prepare_model_for_kbit_training(model)
-
+    
+    # register hook to ensure gradients can be computed for conv1
     def make_inputs_require_grad(module, input, output):
         output = output.to(input[0].device)
         output.requires_grad_(True)
         return output
 
     model.model.encoder.conv1.register_forward_hook(make_inputs_require_grad)
-    # r=32, lora_alpha=64
-    # lora_config = LoraConfig(r=config["rank"], lora_alpha=config["alpha"], target_modules=["q_proj", "v_proj"], lora_dropout=0.05,
-    #                          bias="none")
+
+    # Compute training steps for AdaLoRA config
     training_kwargs["max_steps"] = (steps_per_epoch(training_kwargs["len_train_set"],
                                                config["per_device_train_batch_size"])
                                 * training_kwargs["num_train_epochs"])
-
+    
+    # Setup AdaLoRA config
     lora_config = AdaLoraConfig(
         init_r=config["rank"],  # Initial rank (same as your old LoRA r)
         target_modules=["q_proj", "v_proj"],
@@ -261,28 +509,30 @@ def train_whisper_peft_model(config, training_kwargs=None, data_collators=None, 
         orth_reg_weight=0.8,  # Regularization term for low-rank adaptation
         total_step=training_kwargs["max_steps"]
     )
-    # , task_type="SEQ_2_SEQ_LM")
+    
+    # Apply LoRA adaptation
     model = get_peft_model(model, lora_config)
     model.to(f"cuda:{local_rank}")
     model.print_trainable_parameters()
 
     ###############################################################
-    ####---LOAD MODEL FROM CHECKPOINT IN CASE---#############
+    # 2. LOAD CHECKPOINT (IF AVAILABLE)
+    ###############################################################
     try:
         checkpoint_dir = tune.get_checkpoint()
     except Exception as e:
         print(f"Error calling tune.get_checkpoint(): {e}", flush=True)
         checkpoint_dir = None
 
-    ###############################################################
-    ####---LOAD MODEL FROM CHECKPOINT IN CASE---#############
     if checkpoint_dir:
         trainer_state, starting_step, resume_from_checkpoint = load_checkpoints(checkpoint_dir)
 
+    # Avoid caching in PEFT models
     model.config.use_cache = False
 
     ###############################################################
-    ####---LOAD DATA---###########################################
+    # 3. LOAD DATASETS FROM RAY OR FALLBACK TO LOCAL
+    ###############################################################
     if ray.train.get_dataset_shard("train") is not None:
         print("Fetching dataset shards.")
         train_ds = ray.train.get_dataset_shard("train")
@@ -299,7 +549,7 @@ def train_whisper_peft_model(config, training_kwargs=None, data_collators=None, 
         except Exception as e:
             print(f"Could not load data: {e}")
 
-
+    # Wrap Ray Datasets into PyTorch iterable datasets
     train_ds_iterable = train_ds.iter_torch_batches(
         prefetch_batches=training_kwargs["prefetch_batches"],
         batch_size=config["per_device_train_batch_size"], collate_fn=data_collators["train"])
@@ -308,11 +558,14 @@ def train_whisper_peft_model(config, training_kwargs=None, data_collators=None, 
         prefetch_batches=training_kwargs["prefetch_batches"],
         batch_size=training_kwargs["per_device_eval_batch_size"], collate_fn=data_collators["val"])
 
-
+    ###############################################################
+    # 4. CLEAN UP ARGS AND INITIALIZE TRAINER
+    ###############################################################
     callbacks_ = [SavePeftModelCallback]
     compute_metrics = None
+#    compute_metrics = get_metric_to_optimize("wer", tokenizer=tokenizer)
 
-    del training_kwargs["model_type"]
+    # Remove unused entries from kwargs
     del training_kwargs["target_language"]
     del training_kwargs["return_timestamps"]
     del training_kwargs["run_on_local_machine"]
@@ -323,7 +576,6 @@ def train_whisper_peft_model(config, training_kwargs=None, data_collators=None, 
     del training_kwargs['peft']
     del config['alpha']
     del config['rank']
-
 
     training_args = Seq2SeqTrainingArguments(
         eval_strategy="steps",
@@ -341,161 +593,9 @@ def train_whisper_peft_model(config, training_kwargs=None, data_collators=None, 
         **training_kwargs,
     )
 
-    if eval_sample_size > 0:
-        print(f"Evaluating on random fraction {eval_sample_fraction}%  of {eval_ds.count()}.")
-
-        trainer = Seq2SeqTrainerEvalSampling(
-                        eval_sample_fraction=eval_sample_fraction,
-                        prefetch_batches=prefetch_batches_,
-                        eval_dataset=eval_ds,
-                        eval_collator=data_collators["val"],
-                        args=training_args,
-                        model=model,
-                        train_dataset=train_ds_iterable,
-                        data_collator=data_collator_id,
-                        compute_metrics=compute_metrics,
-                        callbacks=callbacks_
-                        # tokenizer=tokenizer,
-                  )
-
-    else:
-        trainer = Seq2SeqTrainer(
-                    args=training_args,
-                    model=model,
-                    train_dataset=train_ds_iterable,
-                    eval_dataset=eval_ds_iterable,
-                    data_collator=data_collator_id,
-                    compute_metrics=compute_metrics,
-                    callbacks=callbacks_
-                    # tokenizer=tokenizer,  we don't need this as we do the pre-processing before
-                    )
-
-    trainer.add_callback(RayTrainReportCallback())
-
-    if starting_step > 0:
-        trainer.add_callback(StepSyncCallback(starting_step))
-
-    trainer = prepare_trainer_custom(trainer)
-
-    if resume_from_checkpoint:
-        print(f"Resuming from Checkpoint {resume_from_checkpoint}")
-        trainer.train(resume_from_checkpoint=resume_from_checkpoint)
-    else:
-        trainer.train()
-
-
-def train_whisper_model(config, training_kwargs=None, data_collators=None, eval_sample_fraction=1.0):
-    """Main training function for one specific Hyper Parameter configuration.
-
-    Each ray-worker (each hyperparameter configuration) executes this function. The training data needs to be in a ray
-    training iter object which requires a data_collator. However, since we already collated the data in the pre-
-    processing (see DataCollatorSpeechSeq2SeqWithPadding), we simply use the identity as collator.
-
-    The reporting and logging is done by ray tune automatically. To adopt this function for another fine-tuning project,
-    follow similar steps:
-    1. define the required models
-    2. define the evaluation metric
-    3. load the data into ray tune iter
-    4. define trainer Instance (here: Seq2SeqTrainer)
-    5. End with:
-        trainer.add_callback(RayTrainReportCallback())
-        trainer = prepare_trainer(trainer)
-        trainer.train()
-
-    Requires:
-       get_models (function): A function loading the necessary models for training and evaluation
-       compute_metrics (function): A function which computes the metrics (WER in our case)
-
-    Args:
-       config (tune.TuneConfig): Config File with Hyperparameter instances (automaticall generated by ray)
-       training_kwargs (dict): Dictionary of training arguments for the Hugging Face Seq2SeqTrainer
-    """
-    # log_memory_usage("worker_start")
     ###############################################################
-    ####LOAD MODELS############# ##################################
-    starting_step = 0
-    resume_from_checkpoint = None
-    print("lets start the training")
-
-    model, feature_extractor, tokenizer, processor = get_whisper_models(training_kwargs["model_type"],
-                                          training_kwargs["target_language"],
-                                          return_timestamps = training_kwargs["return_timestamps"],
-                                          load_in_8bit = training_kwargs["peft"],
-                                          local = training_kwargs["run_on_local_machine"]
-                                          )
-
-    print("model loaded")
+    # 5. INITIALIZE CUSTOM OR STANDARD TRAINER
     ###############################################################
-    ####---LOAD MODEL FROM CHECKPOINT IN CASE---#############
-    try:
-        checkpoint_dir = tune.get_checkpoint()
-    except Exception as e:
-        print(f"Error calling tune.get_checkpoint(): {e}", flush=True)
-        checkpoint_dir = None
-
-    if checkpoint_dir:
-        trainer_state, starting_step, resume_from_checkpoint = load_checkpoints(checkpoint_dir)
-
-    # Define metric for evaluation
-    print("get wer metric")
-    compute_metrics = get_metric_to_optimize("wer", tokenizer=tokenizer)
-
-    ###############################################################
-    ####---LOAD DATA---###########################################
-    if ray.train.get_dataset_shard("train") is not None:
-        print("Fetching dataset shards.")
-        train_ds = ray.train.get_dataset_shard("train")
-        eval_ds = ray.train.get_dataset_shard("val")
-    else:
-        print(f"Loading dataset within the trainer.")
-        try:
-            dataset_kwargs = data_collators
-            ray_datasets, data_collators = get_datasets_and_collators(dataset_kwargs)
-            train_ds = ray_datasets["train"]
-            eval_ds = ray_datasets["val"]
-            del dataset_kwargs
-            print("Data successfully loaded within the trainer")
-        except Exception as e:
-            print(f"Could not load data: {e}")
-
-
-    train_ds_iterable = train_ds.iter_torch_batches(
-        prefetch_batches = training_kwargs["prefetch_batches"],
-        batch_size=config["per_device_train_batch_size"], collate_fn=data_collators["train"])
-
-    eval_ds_iterable = eval_ds.iter_torch_batches(
-        prefetch_batches = training_kwargs["prefetch_batches"],
-        batch_size=training_kwargs["per_device_eval_batch_size"], collate_fn=data_collators["val"])
-
-    callbacks_ = None
-
-    training_kwargs["max_steps"] = steps_per_epoch(training_kwargs["len_train_set"],config["per_device_train_batch_size"]) * training_kwargs["num_train_epochs"]
-
-    del training_kwargs["model_type"]
-    del training_kwargs["target_language"]
-    del training_kwargs["return_timestamps"]
-    del training_kwargs["run_on_local_machine"]
-    del training_kwargs['len_train_set']        # we remove this as its not part of Seq2Seq
-    del training_kwargs['num_train_epochs']
-    prefetch_batches_ = training_kwargs['prefetch_batches']
-    del training_kwargs['prefetch_batches']
-    del training_kwargs['peft']
-
-    training_args = Seq2SeqTrainingArguments(
-        eval_strategy="steps",
-        save_strategy = "steps",
-        report_to=["tensorboard"],
-        load_best_model_at_end=True,
-        greater_is_better=False,
-        push_to_hub=False,
-        do_eval=True,
-        # Add these optimizations
-        dataloader_pin_memory=True,  # Speed up GPU transfers
-        group_by_length=True,  # Group similar length sequences for efficiency
-        **config,
-        **training_kwargs,
-    )
-
     if eval_sample_fraction < 1:
         print(f"Evaluating on random fraction {eval_sample_fraction}%  of {eval_ds.count()}.")
 
@@ -512,6 +612,7 @@ def train_whisper_model(config, training_kwargs=None, data_collators=None, eval_
                         callbacks=callbacks_
                         # tokenizer=tokenizer,
                   )
+
     else:
         trainer = Seq2SeqTrainer(
                     args=training_args,
@@ -531,6 +632,182 @@ def train_whisper_model(config, training_kwargs=None, data_collators=None, eval_
 
     trainer = prepare_trainer_custom(trainer)
 
+    ###############################################################
+    # 6. START TRAINING
+    ###############################################################
+    if resume_from_checkpoint:
+        print(f"Resuming from Checkpoint {resume_from_checkpoint}")
+        trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+    else:
+        trainer.train()
+
+
+def train_whisper_model(config, training_kwargs=None, data_collators=None, eval_sample_fraction=1.0):
+    """
+    Main training function for Whisper model without PEFT (LoRA/AdaLoRA), using Hugging Face + Ray Tune.
+
+    This function is typically executed as part of a Ray Tune trial. It supports training Whisper models using
+    Hugging Face's Seq2SeqTrainer on Ray datasets, with optional checkpointing and partial evaluation.
+
+    Steps:
+        1. Load Whisper model and tokenizer.
+        2. Optionally resume training from a Ray Tune checkpoint.
+        3. Load training and evaluation datasets (Ray or local fallback).
+        4. Build Seq2SeqTrainingArguments and Trainer.
+        5. Train the model and log metrics via Ray.
+
+    Args:
+        config (dict): Hyperparameter configuration dictionary (e.g., batch size, learning rate).
+        training_kwargs (dict): Training argument dictionary (e.g., steps, output_dir, warmup).
+        data_collators (dict): Dictionary containing "train" and "val" collator functions.
+        eval_sample_fraction (float): Optional fraction (0 < x ≤ 1) of eval set to use (for faster feedback).
+    """
+    # log_memory_usage("worker_start")
+    ###############################################################
+    ####LOAD MODELS############# ##################################
+    starting_step = 0
+    resume_from_checkpoint = None
+    print("lets start the training")
+
+    ###############################################################
+    # 1. LOAD MODEL AND TOKENIZER
+    ###############################################################
+    model, feature_extractor, tokenizer, processor = get_whisper_models(training_kwargs["model_type"],
+                                          training_kwargs["target_language"],
+                                          return_timestamps = training_kwargs["return_timestamps"],
+                                          load_in_8bit = training_kwargs["peft"],
+                                          local = training_kwargs["run_on_local_machine"]
+                                          )
+
+    print("model loaded")
+
+    ###############################################################
+    # 2. LOAD CHECKPOINT IF AVAILABLE
+    ###############################################################
+    try:
+        checkpoint_dir = tune.get_checkpoint()
+    except Exception as e:
+        print(f"Error calling tune.get_checkpoint(): {e}", flush=True)
+        checkpoint_dir = None
+
+    if checkpoint_dir:
+        trainer_state, starting_step, resume_from_checkpoint = load_checkpoints(checkpoint_dir)
+
+    ###############################################################
+    # 3. DEFINE METRICS
+    ###############################################################
+    print("Initializing evaluation metric: WER")
+    compute_metrics = get_metric_to_optimize("wer", tokenizer=tokenizer)
+
+    ###############################################################
+    # 4. LOAD DATASETS FROM RAY OR LOCAL FALLBACK
+    ###############################################################
+    if ray.train.get_dataset_shard("train") is not None:
+        print("Using pre-loaded Ray dataset shards.")
+        train_ds = ray.train.get_dataset_shard("train")
+        eval_ds = ray.train.get_dataset_shard("val")
+    else:
+        print(f"Loading dataset within the trainer.")
+        try:
+            dataset_kwargs = data_collators
+            ray_datasets, data_collators = get_datasets_and_collators(dataset_kwargs)
+            train_ds = ray_datasets["train"]
+            eval_ds = ray_datasets["val"]
+            del dataset_kwargs
+            print("Data successfully loaded within the trainer")
+        except Exception as e:
+            print(f"Could not load data: {e}")
+
+    # Wrap Ray datasets for PyTorch
+    train_ds_iterable = train_ds.iter_torch_batches(
+        prefetch_batches = training_kwargs["prefetch_batches"],
+        batch_size=config["per_device_train_batch_size"], collate_fn=data_collators["train"])
+
+    eval_ds_iterable = eval_ds.iter_torch_batches(
+        prefetch_batches = training_kwargs["prefetch_batches"],
+        batch_size=training_kwargs["per_device_eval_batch_size"], collate_fn=data_collators["val"])
+
+    ###############################################################
+    # 5. CLEAN UP TRAINING KWARGS AND CONFIG
+    ###############################################################
+    # Compute total max steps based on dataset size and epochs
+    training_kwargs["max_steps"] = steps_per_epoch(training_kwargs["len_train_set"],config["per_device_train_batch_size"]) * training_kwargs["num_train_epochs"]
+
+    del training_kwargs["model_type"]
+    del training_kwargs["target_language"]
+    del training_kwargs["return_timestamps"]
+    del training_kwargs["run_on_local_machine"]
+    del training_kwargs['len_train_set']        # we remove this as its not part of Seq2Seq
+    del training_kwargs['num_train_epochs']
+    prefetch_batches_ = training_kwargs['prefetch_batches']
+    wer_weight_ = training_kwargs["wer_weight"]
+    del training_kwargs['prefetch_batches']
+    del training_kwargs['wer_weight']
+    del training_kwargs['peft']
+
+    ###############################################################
+    # 6. CREATE TRAINING ARGUMENTS
+    ###############################################################
+    training_args = Seq2SeqTrainingArguments(
+        eval_strategy="steps",
+        save_strategy = "steps",
+        report_to=["tensorboard"],
+        load_best_model_at_end=True,
+        greater_is_better=False,
+        push_to_hub=False,
+        do_eval=True,
+        # Add these optimizations
+        dataloader_pin_memory=True,  # Speed up GPU transfers
+        group_by_length=True,  # Group similar length sequences for efficiency
+        **config,
+        **training_kwargs,
+    )
+
+    ###############################################################
+    # 7. INITIALIZE THE TRAINER (WITH OR WITHOUT SUBSAMPLING)
+    ###############################################################
+    if eval_sample_fraction < 1:
+        print(f"Evaluating on random fraction {eval_sample_fraction}%  of {eval_ds.count()}.")
+
+        trainer = Seq2SeqTrainerEvalSampling(
+                        eval_sample_fraction=eval_sample_fraction,
+                        prefetch_batches=prefetch_batches_,
+                        eval_dataset=eval_ds,
+                        eval_collator=data_collators["val"],
+                        wer_weight = wer_weight_,
+                        args=training_args,
+                        model=model,
+                        train_dataset=train_ds_iterable,
+                        data_collator=data_collator_id,
+                        compute_metrics=compute_metrics,
+                        callbacks=None
+                        # tokenizer=tokenizer,
+                  )
+    else:
+        trainer = Seq2SeqTrainer(
+                    args=training_args,
+                    model=model,
+                    train_dataset=train_ds_iterable,
+                    eval_dataset=eval_ds_iterable,
+                    data_collator=data_collator_id,
+                    compute_metrics=compute_metrics,
+                    callbacks=None
+                    # tokenizer=tokenizer,  we don't need this as we do the pre-processing before
+                    )
+
+    ###############################################################
+    # 8. SETUP RAY TUNE CALLBACKS
+    ###############################################################
+    trainer.add_callback(RayTrainReportCallback())
+
+    if starting_step > 0:
+        trainer.add_callback(StepSyncCallback(starting_step))
+
+    trainer = prepare_trainer_custom(trainer)
+
+    ###############################################################
+    # 9. BEGIN TRAINING
+    ###############################################################
     if resume_from_checkpoint:
         print(f"Resuming from Checkpoint {resume_from_checkpoint}")
         trainer.train(resume_from_checkpoint=resume_from_checkpoint)

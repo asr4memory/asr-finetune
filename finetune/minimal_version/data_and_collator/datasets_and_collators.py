@@ -1,3 +1,17 @@
+"""
+Dataset and Collator Utilities for Whisper ASR Training (Ray-compatible)
+
+This module handles loading datasets from HDF5, Parquet, or folder structures and prepares
+them for training Whisper models. It also provides multiprocessing-compatible collators for
+efficient batch creation using Ray Tune, with support for streaming or in-memory processing.
+
+Core functionalities include:
+- HDF5 and Parquet dataset reading
+- Folder-based audio + metadata.csv parsing
+- Streaming collators (with multiprocessing or single-thread)
+- Padding collator for sequence-to-sequence models
+- Dataset preparation and preprocessing (log-Mel extraction, tokenization)
+"""
 import multiprocessing
 import pdb
 import sys
@@ -19,12 +33,14 @@ _shared_hdf5 = None
 
 
 def make_dataset_kwargs(args):
-    """Arguments Filter for the dataset loading.
+    """
+    Extract relevant dataset arguments from the global args.
 
     Args:
-        args (dict): dictionary of keyboard arguments
+        args (argparse.Namespace): Command-line arguments or config object.
+
     Returns:
-       data_kwargs (dict): dictionary of relevant data fetching arguments
+        dict: Dictionary containing all required dataset config fields.
     """
 
     data_kwargs = {
@@ -45,6 +61,12 @@ def make_dataset_kwargs(args):
 
 
 def _init_worker(hdf5_path):
+    """
+    Initialize a shared HDF5 file handle in a worker process.
+
+    This enables multiprocessing workers to access the same HDF5 file without
+    reopening it repeatedly.
+    """
     global _shared_hdf5
 
     import h5py
@@ -53,6 +75,12 @@ def _init_worker(hdf5_path):
 
 
 def _process_index_shared(idx):
+    """
+    Read a single sample from the shared HDF5 file by index.
+
+    Returns:
+        Tuple: (idx, audio, transcription) or (idx, None, None) on failure.
+    """
     global _shared_hdf5
 
     try:
@@ -70,6 +98,20 @@ def _process_index_shared(idx):
 
 
 class SimpleStreamingCollator:
+    """
+    Streaming Collator for HDF5 files using multiprocessing or single-thread.
+
+    This collator supports on-the-fly audio loading and preprocessing
+    from large HDF5 datasets with optional multiprocessing acceleration.
+
+    Args:
+        hdf5_path (str): Path to the HDF5 file.
+        feature_extractor: Hugging Face WhisperFeatureExtractor.
+        tokenizer: Hugging Face WhisperTokenizer.
+        num_workers (int): Number of parallel workers. Set to 0 for single-thread mode.
+        copy_to_local (bool): Whether to copy the dataset file to local /tmp for I/O speed.
+    """
+    
     def __init__(self, hdf5_path, feature_extractor, tokenizer, num_workers=None, copy_to_local=False):
         self.hdf5_path = self._copy_to_local(hdf5_path) if copy_to_local else hdf5_path
         self.feature_extractor = feature_extractor
@@ -89,6 +131,17 @@ class SimpleStreamingCollator:
         self.batch_count = 0
 
     def __call__(self, batch_dict):
+        """
+        Processes a batch of indices from Ray Datasets.
+
+        Extracts audio + transcription, applies preprocessing, returns padded features + labels.
+
+        Args:
+            batch_dict (dict): Must contain key 'idx' listing dataset indices.
+
+        Returns:
+            dict: {"input_features": tensor, "labels": tensor}
+        """
         start = time.time()
         indices = batch_dict['idx']
 
@@ -153,7 +206,11 @@ class SimpleStreamingCollator:
         return self._prepare_dataset(mel_features_list, transcription_list)
 
     def _copy_to_local(self, path: str) -> str:
-        """Copy HDF5 file to local storage for better performance."""
+        """
+        Copies dataset to local storage for better I/O performance.
+
+        Useful in distributed settings where local disk is faster than shared.
+        """
         fname = os.path.basename(path)
         local_dir = "/tmp"
         local_path = os.path.join(local_dir, fname)
@@ -170,6 +227,12 @@ class SimpleStreamingCollator:
         return local_path
 
     def _prepare_dataset(self, mel_features_list, transcriptions):
+        """
+        Prepares final input and label tensors from processed audio and transcriptions.
+
+        Returns:
+            dict: Batched inputs and labels suitable for Hugging Face training.
+        """
         padded_features = self.feature_extractor.pad(
             mel_features_list,
             padding="longest",
@@ -214,6 +277,15 @@ class SimpleStreamingCollator:
 
 
 def collate_parquet(batch):
+    """
+    Collator for Parquet-based datasets where audio features and labels are already computed.
+
+    Args:
+        batch (list): Each element must have 'input_features' and 'labels'.
+
+    Returns:
+        dict: PyTorch tensors for input and labels.
+    """
     input_features_batch = torch.stack([torch.from_numpy(x) for x in batch["input_features"]])
     labels_batch = torch.stack([torch.from_numpy(x) for x in batch["labels"]])
     return {
@@ -224,13 +296,16 @@ def collate_parquet(batch):
 
 def create_ray_indexloader(file_path: str, samples=0):
     """
-    Create Ray dataset for a single HDF5 file.
+    Create a Ray Dataset index loader for an HDF5 file.
+
+    This wraps HDF5 file into a Ray dataset using just the sample indices.
 
     Args:
-        file_path: Path to the HDF5 file
+        file_path (str): Path to .h5 dataset.
+        samples (int): Optional number of samples to limit (for debugging).
 
     Returns:
-        Ray dataset
+        ray.data.Dataset: Ray index dataset with "idx" field.
     """
     # Get number of samples in the file
     with h5py.File(file_path, 'r') as f:
@@ -252,27 +327,23 @@ def create_ray_indexloader(file_path: str, samples=0):
 
 from datasets import load_dataset, DatasetDict, concatenate_datasets
 def load_and_prepare_data_from_folders(path,feature_extractor,tokenizer,test_size=0.2, seed = 0, mode = "train", debug = False):
-    """Loads and prepares data from a folder directory.
+    """
+    Load audio dataset from folder structure and prepare for Whisper training.
 
-    `Important`: Each folder needs to have a subfolder "data" (name not important) containing the .mav audio files AND
-                 a metadata.csv file with columns 'file_name' and 'transcription'. The file_name must match the file
-                 name in the data folder. The transcription is a string of the true transcription of the audio.
+    Each subfolder must contain:
+        - A "data/" directory with .wav files.
+        - A metadata.csv file with 'file_name' and 'transcription'.
 
-    We
-        1. loop through subfolders of path-folder, load each folder as dataset, and concatenate datasets
-        2. Do the train, validation, and test splits
-        3. Resample the audio data and compute the log-Mel input features
+    Returns a DatasetDict with 'train', 'validation', or 'test'.
 
     Args:
-        path (str): Directory path of head data folder
-        feature_extractor (WhisperFeatureExtractor): Feature extractor calculates the log-Mel representations of inputs
-                                                     used for training and evaluation
-        tokenizer (WhisperTokenizer): The tokenizer is converting target-text into tokens.
-        test_size (float): Fraction of total data used for testing.
-        seed (int): random seed for reproducibility
-        evaluate (bool): If true, only the test set is created. Otherwise: train and validation set.
-        debug (bool): If true, does some statistics on the test set (if evaluate=True) or validation set (otherwise).
-                      Should result to the same value if one wants to compare two different models.
+        path (str): Root folder path.
+        feature_extractor: WhisperFeatureExtractor.
+        tokenizer: WhisperTokenizer.
+        test_size (float): Fraction of data for test set.
+        seed (int): Random seed for reproducibility.
+        mode (str): One of ['train', 'validation', 'test'].
+        debug (bool): Log debug stats.
     """
     data_collection = []
     first_level_subfolders = [f.path for f in os.scandir(path) if f.is_dir()]
@@ -346,31 +417,27 @@ from typing import Any
 import numpy as np
 @dataclass
 class DataCollatorSpeechSeq2SeqWithPadding:
-    """Data Collator for Speech Seq2Seq models with Padding
+    """
+    Custom collator for padding inputs and labels for Whisper fine-tuning.
 
-    We used the collator suggested by the tutorial: https://huggingface.co/blog/fine-tune-whisper.
-    We had to slightly modify it due our data being in a different format as required by ray tune.
+    Adapted from Hugging Face tutorial. Ensures labels are properly masked.
 
     Attributes:
-       processor (WhisperProcessor): Processor used for padding (normalizing data to same length)
-       decoder_start_token_id (int): Token indicating the Beginning Of Setence (BOS)
-
-    Methods:
-       __call__(features): Processing a dictionary of input features
+        processor (WhisperProcessor): Combined tokenizer + feature_extractor.
+        decoder_start_token_id (int): BOS token, will be removed if present at start of label.
     """
     processor: Any
     decoder_start_token_id: int
 
     def __call__(self, features):
-        """ Processing a dictionary of input features.
-
-        Input features are padded to `longest` forms and pytorch tensors are returned.
+        """
+        Pad batch of features for Seq2Seq training.
 
         Args:
-            features (dict): A dictionary with keys 'input_features' consiting of log-Mel features and tokenized
-                             'labels'
-        Returns"
-            batch (dict): Dictionary of padded `input_features` and `labels` as pytorch tensors
+            features (dict): Dictionary with input_features and labels.
+
+        Returns:
+            dict: Padded PyTorch tensors.
         """
         # split inputs and labels since they have to be of different lengths and need different padding methods
         # first treat the audio inputs by simply returning torch tensors
@@ -396,13 +463,13 @@ class DataCollatorSpeechSeq2SeqWithPadding:
 
 def normalize(text):
     """
-    Removes certain characters from text and lowers cases.
+    Normalize transcription by lowercasing and removing punctuation.
 
     Args:
-        text (str or list of str): Single string or list of strings to be normalized.
+        text (str or list of str): Input transcription(s).
 
     Returns:
-        str or list of str: Normalized string or list of normalized strings.
+        Normalized string(s).
     """
     def process_single_text(single_text):
         result = single_text.strip().lower()
@@ -418,39 +485,52 @@ def normalize(text):
 
 
 def steps_per_epoch(len_train_set,batch_size):
-    """Calculates the total number of gradient steps
-
-    Assume gradient_accumulation_steps = 1.
+    """
+    Calculate number of steps per epoch, assuming gradient_accumulation_steps = 1.
 
     TODO:
-        * Add gradient_accumulation_steps > 1
-        * adjust train.py to allow for gradient accumulations
+        - Extend to support gradient accumulation > 1
 
     Args:
-        len_train_set (int): Total dataset length
-        batch_size (int): batch size
+        len_train_set (int): Total number of samples.
+        batch_size (int): Training batch size.
+
+    Returns:
+        int: Number of gradient steps per epoch.
     """
     if len_train_set % batch_size == 0:
         return int(len_train_set / batch_size)
     else:
        return int(len_train_set / batch_size) + 1
 
-# Define a custom argument type for a list of strings
+
 def list_of_strings(arg):
+    """
+    Custom argparse type that parses comma-separated strings into a list.
+
+    Example:
+        Input: "a,b,c"
+        Output: ['a', 'b', 'c']
+    """
     return arg.split(',')
 
 
 def get_datasets_and_collators(args,
                                test_size=0.2):
-    """Datasets fetcher for different scenarios
+    """
+    Dataset and Collator loader based on input mode (h5/parquet/folder).
 
-    1. If data is in a folder structure with a .csv overview file
-    2. If data is in .h5 only
-    3. If data is parquet file(s)
+    Handles:
+      - HDF5: Ray-compatible streaming via index loader
+      - Parquet: Pre-processed datasets
+      - Folder: Audio + metadata CSV parsing and preprocessing
 
     Returns:
-        Dictionary with keys: train, validation, testing
+        Tuple:
+            ray_datasets (dict): Ray Datasets for 'train', 'validation', etc.
+            data_collators (dict): Corresponding collators for each dataset.
     """
+    
     limit_samples = 100 if args["debug"] else 0
     num_workers = args["cpus_per_trial"]
     seed = args["random_seed"]
@@ -472,7 +552,7 @@ def get_datasets_and_collators(args,
     for dataset_mode, config in data_mode.items():
         logger.info("Getting dataset and collator for %s", dataset_mode)
         if config["type"] == "parquet":
-            path_to_ds_ = os.path.join(path_to_ds,dataset_mode,"parquet")
+            path_to_ds_ = os.path.join(path_to_ds,dataset_mode+"_parquet")
             if os.path.exists(path_to_ds_):
                 ds = ray.data.read_parquet(path_to_ds_)
             else:
@@ -480,9 +560,8 @@ def get_datasets_and_collators(args,
                        f"Make sure you save your parquet file in the format {dataset_mode}_parquet")
 
         elif config["type"] == "h5":
-            path_to_ds_ = os.path.join(path_to_ds,"eg_dataset_subset_1000_testing_1337.h5")
+            path_to_ds_ = os.path.join(path_to_ds,dataset_mode+".h5")
                                                             # "dataset_mode+".h5")
-            path_to_ds_ = r"/Users/chrvt/Documents/GitHub/asr-finetune/data_example/datasets/eg_dataset_subset_1000_testing_1337.h5"
             if os.path.exists(path_to_ds_):
                 ds = create_ray_indexloader(path_to_ds_, samples=limit_samples)
             else:

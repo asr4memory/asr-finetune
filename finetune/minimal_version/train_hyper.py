@@ -1,21 +1,20 @@
 """Main Hyper-Parameter Finetuning script for Whisper ASR using Ray Tune.
 
-For training whisper, we use the Huggingface (HF) transformers package. We base the training on the following tutorial for
-finetuning using HF-Whisper: https://huggingface.co/blog/fine-tune-whisper
+This script uses Hugging Face Transformers and Ray Tune to optimize training
+of Whisper models for automatic speech recognition (ASR).
 
-For allowing Ray Tune Hyperparmeter finetunging with HF-Whisper, we follow the following tutorial:
+Training logic is based on the HF Whisper finetuning tutorial:
+https://huggingface.co/blog/fine-tune-whisper
+
+Ray Tune integration follows:
 https://docs.ray.io/en/latest/train/getting-started-transformers.html
 
-A high-level overview of the training procsess:
-    1.  We prepare the ray tune finetuning (Tuner) object. Defining the hyperparameters to tune, which scheduler to use
-        how many resources to reserve for each training, how many trials etc.
-    2.  train_model will be called by each trial. This is the main training function based on the HF Seq2SeqTrainer,
-        see trainers.py
+Overview of steps:
+1. Define Ray Tune Tuner object with hyperparameters, scheduler, resources, etc.
+2. Each trial runs train_model(), a wrapper around HF Seq2SeqTrainer.
 
-For a description of what each function is doing, we refer to the docstrings of the very function.
-
-*Note*: For using this finetuning script for a different set-up (different model, different task the ASR), the
-get_models, train_model, and get_hyperparameters needs to be adjusted.
+Note:
+To adapt to another task or model, modify get_models(), train_model(), and get_hyperparameters().
 """
 # General
 import os
@@ -44,13 +43,14 @@ from searchers_and_schedulers.ray_searchers_and_schedulers import get_whisper_hy
 
 # Datasets
 from data_and_collator.datasets_and_collators import get_datasets_and_collators, make_dataset_kwargs
+from projects_paths import DATA_PATH
 
 # Logging control
-os.environ["RAY_AIR_NEW_OUTPUT"] = "0"
-os.environ["RAY_VERBOSITY"] = "0"
-os.environ["RAY_TRAIN_ENABLE_V2_MIGRATION_WARNINGS"] = "0"
-ray.data.context.DataContext.get_current().enable_operator_progress_bars = False
-ray.data.context.DataContext.get_current().enable_progress_bars = False
+os.environ["RAY_AIR_NEW_OUTPUT"] = "1"
+os.environ["RAY_VERBOSITY"] = "1"
+#os.environ["RAY_TRAIN_ENABLE_V2_MIGRATION_WARNINGS"] = "0"
+ray.data.context.DataContext.get_current().enable_operator_progress_bars = True
+ray.data.context.DataContext.get_current().enable_progress_bars = True
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +69,7 @@ def parse_args():
 
     # Training settings for Seq2SeqTrainingArguments
     parser.add_argument("--per_device_train_batch_size", type=int, default=16, help="Batch size per device")
+    parser.add_argument("--per_device_eval_batch_size", type=int, default=8, help="Batch size per device")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="increase by 2x for every 2x decrease in batch size")
     # The only reason to use gradient accumulation steps is when your whole batch size does not fit on one GPU, so you pay a price in terms of speed to overcome a memory issue.
     parser.add_argument("--output_tag", type=str,
@@ -101,8 +102,12 @@ def parse_args():
 
     ## Hyperparameter Optimization settings for Ray Tune
     # Training configs
+    parser.add_argument("--warmup_steps", type=int, default=0,
+                        help="Linear warmup of LR.")
+    parser.add_argument("--warmup_ratio", type=float, default=0.0,
+                        help="Ratio of total training steps used for a linear warmup. Will only work when warmup_steps = 0 otherwise warmup_steps overides this.")
     parser.add_argument("--max_warmup_steps", type=int, default=10,
-                        help="For Hyperparam search. What is the max value for warmup?")
+                        help="For Hyperparam search. What is the max value for warmup steps?")
     parser.add_argument("--len_train_set", type=int, default=10,
                         help="Helper variable to define max_t which is required for schedulers.")
     parser.add_argument("--max_concurrent_trials", type=int, default=1,
@@ -116,7 +121,7 @@ def parse_args():
     # tune options: https://docs.ray.io/en/latest/tune/api/doc/ray.tune.TuneConfig.html
     parser.add_argument("--num_samples", type=int, default=5, help="Number of times to sample from the hyperparameter space.")
     parser.add_argument("--num_to_keep", type=int, default=1, help="number of checkpoints to keep on disk")
-    # parser.add_argument("--max_t", type=int, default=10, help="Max number of steps for finding the best hyperparameters")
+    parser.add_argument("--max_t", type=int, default=10, help="Max number of steps for finding the best hyperparameters")
     parser.add_argument("--num_workers", type=int, default=1, help="Number of trials that can run at the same time")
     parser.add_argument("--cpus_per_trial", type=int, default=1, help="Number of CPUs per Ray actor")
     parser.add_argument("--gpus_per_trial", type=float, default=0, help="Number of GPUs per Ray actor")
@@ -124,9 +129,9 @@ def parse_args():
     parser.add_argument("--fp16", action="store_true", default=False, help="Training with floating point 16 ")
     parser.add_argument("--reuse_actors", action="store_true", help="Reusing Ray Actors should accelarate training")
     parser.add_argument("--metric_to_optimize", type=list_of_strings, action ="append", help="Metric which is used for deciding what a good trial is.")
+    parser.add_argument("--wer_weight", type=float, default=1.0, help="Weight of WER in eval_loss_wer metric to optimize.")
     parser.add_argument("--modes", type=list_of_strings, action ="append", help="Modes of metrics (mix or max). Position 1 refers to metric 1 etc.")
-    parser.add_argument("--eval_sample_size", type=int, default=10, help="Divides the evaluation set in eval_sample_size shards,"
-                                                                         "and evaluates only a sub-sample after each eval step")
+    parser.add_argument("--eval_sample_fraction", type=float, default=1.0, help="Fraction of Eval set to evaluate (will be randomly shuffled every time.")
     # For Scheduler and Search algorithm specifically: https://docs.ray.io/en/latest/tune/api/schedulers.html#resourcechangingscheduler
     parser.add_argument("--search_schedule_mode", type=str, default="large_small_BOHB", choices=TUNE_CHOICES, help="Which Searcher Algorithm and Scheduler combination. See 'get_searcher_and_scheduler' function for details.")
     parser.add_argument("--reduction_factor", type=int, default=2, help="Factor by which trials are reduced after grace_period of time intervals")
@@ -143,7 +148,7 @@ def parse_args():
     parser.add_argument("--storage_path", type=str, default="./output/scratch", help="Where to store ray tune results. ")
     parser.add_argument("--resume_training", action="store_true", help="Whether or not to resume training.")
     parser.add_argument("--debug", action="store_true", help="Debug mode (more log output, additional callbacks)")
-    parser.add_argument("--path_to_data", type=str, default="../data/datasets/fzh-wde0459_03_03",
+    parser.add_argument("--path_to_data", type=str, default="",
                         help="Path to audio batch-prepared audio files if in debug mode. Otherwise: all data in datasets are loaded")
     parser.add_argument("--dataset_name", type=str, default="eg_dataset_subset_1000.h5",
                         help="Name of dataset")
@@ -156,16 +161,13 @@ def parse_args():
 
 if __name__ == "__main__":
     """Ray Tune Workers Configuration
-    
-    We break the configuration down in several steps
-    1. We load and pre-process the data
-    2. We define the TorchTrainer for each trial, including the resources (GPUs, CPUs, Workers) per trial
-       https://docs.ray.io/en/latest/_modules/ray/train/torch/torch_trainer.html#TorchTrainer
-    3. We define the searchers and schedulers (get_searcher_and_scheduler) used to find the optimizal paramters
-    4. We set-up a ray Tuner Object defining the the hyperparameters, and other important Configs 
-    """
 
-    """STEP 1: Data laoding and pre-processing"""
+    We organize the workflow in several main steps:
+    1. Load and preprocess the dataset (Ray Dataset API).
+    2. Define the TorchTrainer per trial, including resource allocation.
+    3. Set up hyperparameter search strategy and early stopping schedulers.
+    4. Create and run a Ray Tune Tuner for automated hyperparameter optimization.
+    """
 
     # Arguments and Logger
     args = parse_args()
@@ -184,37 +186,25 @@ if __name__ == "__main__":
         os.makedirs(args.output_dir)
     save_file(config_,args.output_dir)
 
-    # if args.run_on_local_machine:
-    #     args.storage_path = os.path.join(os.getcwd(),"output")
-    #     ray.init()
-    # else:
-    #     ray.init("auto")
+    if args.run_on_local_machine:
+        args.storage_path = os.path.join(os.getcwd(),"output")
+        ray.init()
+    else:
+        ray.init("auto")
 
-    # logger.info("Ray Nodes info: %s", ray.nodes())
-    # logger.info("Ray Cluster Resources: %s", ray.cluster_resources())
+    logger.info("Ray Nodes info: %s", ray.nodes())
+    logger.info("Ray Cluster Resources: %s", ray.cluster_resources())
 
 
-    """STEP 1: Load the data
-    
-        We need to define a data_mode config with defining which type of data and collator is used.
+    """STEP 1: Data Loading and Preprocessing
+
+    Depending on config:
+    - Dataset and collator can be loaded externally or inside the trainer.
+    - Dataset format (.h5 or .parquet) is determined by args.data_mode.
     """
 
-    path_to_data = os.path.join(args.path_to_data, args.dataset_name)
+    args.path_to_data = DATA_PATH #os.path.join(DATA_PATH, args.dataset_name)
 
-    # data_mode = {
-    #     "train": {"type": "h5",
-    #               "collator": "streaming",
-    #               "path_to_ds": path_to_data},
-    #     "val": {"type": "h5",
-    #             "collator": "streaming",
-    #             "path_to_ds": path_to_data}
-        # "val": {"type": "parquet",
-        #         "collator": "parquet",
-        #         "path_to_ds": path_to_data}
-        # "val": {"type": "h5",
-        #                "collator": "streaming",
-        #                "path_to_ds": path_to_data}
-    # }
 
     dataset_kwargs = make_dataset_kwargs(args)
     if not args.load_ds_in_trainer:
@@ -240,18 +230,14 @@ if __name__ == "__main__":
     # get the relevant hyperparameter config and training kwargs (necessary for finetuning with ray)
     training_kwargs = make_training_kwargs(args)
 
-    """STEP 2: Define the Ray Trainer
-   
-    Args: 
-        train_model (function): the training function to execute on each trial.
-                     The partial wrapper allows for additional arguments (config is required).  
-        scaling_config (ScalingConfig): resources_per_worker...defines CPU and GPU requirements used by each worker.
-                     num_workers...number of workers used for each trial
-                     placement_strategy...how job is distributed across different nodes
-       datasets (dict): Dataset dictionary. Train and eval with ray_dataset objects is required. 
-    
-    Reference: https://docs.ray.io/en/latest/_modules/ray/train/torch/torch_trainer.html#TorchTrainer
+    """STEP 2: Define Ray TorchTrainer
+
+    Trainer wraps the training loop per Ray trial.
+    - Uses HF Seq2SeqTrainer via train_whisper_model or train_whisper_peft_model.
+    - ScalingConfig controls resource usage (CPU/GPU) and worker distribution.
+    - Dataset either passed here or loaded inside training function (optional).
     """
+
 
     resources_per_trial={"CPU": args.cpus_per_trial, "GPU": args.gpus_per_trial}
 
@@ -261,7 +247,7 @@ if __name__ == "__main__":
         partial(train_model,
                 training_kwargs=training_kwargs,
                 data_collators=data_collators,
-                eval_sample_size=args.eval_sample_size),  # the training function to execute on each worker.
+                eval_sample_fraction=args.eval_sample_fraction),  # the training function to execute on each worker.
         scaling_config=ScalingConfig(num_workers=args.num_workers,
                                      use_gpu=args.use_gpu,
                                      resources_per_worker = resources_per_trial,
@@ -279,32 +265,18 @@ if __name__ == "__main__":
 
     tune_searcher, tune_scheduler = get_searcher_and_scheduler(args)
 
-    """Step 4: Set-up a ray Tuner [1]
+    """STEP 3: Configure Ray Tune Tuner
 
-    The Tuner Object takes the trainer, defines the param_space, configures the searcher and scheduler, while observing the
-    checkpointing config (more details below). 
-
-    If resume_training = True, training is resumed from the previous interrupted training. Important: all the settings needs
-    to be the same as the original run. We resume unfinished and errored trials. Terminated trials will not be resumed.
-    Ref: [2] 
-
-    More Details:
-        param_space (dict)...defines the hyper-parameter space we search for optimal parameters. Requires a prior distribut.
-                             over the hyperparameters. Instances of parameters will be passed to Seq2SeqTrainingArguments.
-                             In principle, every optimial parameter there can be part of the param_space.           
-        tune_config (Tune.Config) ... Config for deciding which metric to use for deifning a good trial (e.g. eval_loss or 
-                                      eval_wer,  number of total trials/hyperparameter set-ups (num_samples), searcher, 
-                                      scheduler. Reuse_actor optimizes resource usage so that all GPUs are always used.
-        run_config (RunConfig): Runtime configuration that is specific to individual trials.
-                    num_to_keep...how many checkpoints to keep (more requires more memory)
-                    checkpoint_score_attribute...which metric to use for performance
-                    checkpoint_score_order...min means the lower the checkpoint_score_attribute, the better
+    - Tuner handles full HPO (Hyperparameter Optimization) loop:
+        * Samples from parameter space defined in get_hyperparameters().
+        * Uses Ray Tune's searchers and schedulers to explore space efficiently.
+        * Stores checkpoints and logs results to output directory.
+    - Can optionally resume from a previous run if interrupted.
 
     References:
         [1] https://docs.ray.io/en/latest/tune/api/doc/ray.tune.Tuner.html
         [2] https://docs.ray.io/en/latest/tune/tutorials/tune-fault-tolerance.html#tune-fault-tolerance-ref 
     """
-
 
     if args.resume_training:
         tuner = Tuner.restore(os.path.join(args.storage_path, args.output_tag),
@@ -330,7 +302,7 @@ if __name__ == "__main__":
             # run_config
             run_config=RunConfig(
                 name=args.output_tag,     # folder name where ray workers results are saved and basis for tensorboard viz.
-                # storage_path=args.storage_path,
+                 storage_path=args.storage_path,
                 checkpoint_config=CheckpointConfig(
                     num_to_keep= args.num_to_keep,
                     checkpoint_score_attribute=args.metric_to_optimize[0][0],
@@ -338,7 +310,8 @@ if __name__ == "__main__":
                 ),
             ),
         )
-
+        
+    # Sort and retrieve best result based on configured metric (e.g. eval_wer).
     tune_results = tuner.fit()
     tune_results.get_dataframe().sort_values(args.metric_to_optimize)
     best_result = tune_results.get_best_result()

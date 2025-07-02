@@ -4,8 +4,15 @@ from transformers import TrainerCallback
 import torch
 from transformers import TrainingArguments, TrainerState, TrainerControl
 
-# This callback helps to save only the adapter weights and remove the base model weights.
+# ------------------------------------------------------------------------------
+# Callback to Save Only Adapter Weights (e.g. for PEFT/LoRA)
+# ------------------------------------------------------------------------------
 class SavePeftModelCallback(TrainerCallback):
+    """
+    HuggingFace Trainer callback to save only the adapter model (e.g. LoRA weights)
+    and remove the base model weights from checkpoints to save disk space.
+    """
+    
     def on_save(
             self,
             args: TrainingArguments,
@@ -23,7 +30,16 @@ class SavePeftModelCallback(TrainerCallback):
             os.remove(pytorch_model_path)
         return control
 
+# ------------------------------------------------------------------------------
+# Callback to Synchronize Trainer State from Previous Checkpoint
+# ------------------------------------------------------------------------------
+
 class StepSyncCallback(TrainerCallback):
+    """
+    Callback to synchronize the training step counter (`state.global_step`)
+    with a previously saved checkpoint, for seamless resumption.
+    """
+    
     def __init__(self, starting_step):
         self.starting_step = starting_step
         self.has_synced = False
@@ -35,8 +51,22 @@ class StepSyncCallback(TrainerCallback):
             state.global_step = self.starting_step
             self.has_synced = True
 
+# ------------------------------------------------------------------------------
+# Checkpoint Loader Utility
+# ------------------------------------------------------------------------------
 
 def load_checkpoints(checkpoint_dir):
+    """
+    Loads a HuggingFace trainer_state.json file to resume training from a checkpoint.
+
+    Args:
+        checkpoint_dir (Path): Pathlib Path object pointing to the experiment directory.
+
+    Returns:
+        trainer_state (dict): The parsed trainer_state.json
+        starting_step (int): The global step at which to resume training
+        resume_from_checkpoint (str): Path to checkpoint folder, or None
+    """
     resume_from_checkpoint = None
     starting_step = 0
     try:
@@ -59,7 +89,23 @@ def load_checkpoints(checkpoint_dir):
 
 
 
-# this is a hack - as train_ds from Ray requires the data_collotor, so does Seq2SeqTrainer from HF
-# but collating twice does not make sense, therefore we introduce the indentity collator
+# ------------------------------------------------------------------------------
+# Identity Data Collator for Ray Integration (No Double Collation)
+# ------------------------------------------------------------------------------
+
 def data_collator_id(batch):
-    return {k: v.to(f"cuda:{local_rank}") if torch.is_tensor(v) else v for k, v in batch.items()}
+    """
+    Identity data collator that simply moves tensors to the correct device
+    without further collation. Used when Ray already collated the batch.
+
+    Args:
+        batch (dict): A batch of already-prepared inputs from Ray DataLoader.
+
+    Returns:
+        dict: Batch with tensors moved to the appropriate CUDA device.
+    """
+    local_rank = int(os.getenv("LOCAL_RANK", 0))  # Fallback to 0 if not set
+    return {
+        k: v.to(f"cuda:{local_rank}") if torch.is_tensor(v) else v
+        for k, v in batch.items()
+    }

@@ -44,9 +44,14 @@ def get_searcher_and_scheduler(args):
     max_t = steps_per_epoch(args.len_train_set, args.per_device_train_batch_size) * args.num_train_epochs
     max_t_ = args.max_steps
 
+    grace_period = calculate_grace_period(max_t, warmup_steps = args.warmup_steps,
+                                          warmup_ratio = args.warmup_ratio,
+                                          max_warmup_steps = args.max_warmup_steps)
+
     logger.info(f"Early stopping after {max_t_} steps for scheduler.\n"
                 f"Actualy number of steps: {max_t} \n"
-                f"Fraction we train: {round(100 * max_t / max_t_, 2)}")
+                f"Fraction we train: {round(100 * max_t / max_t_, 2)} \n \n"
+                f"Grace Period before scheduler kicks in: {grace_period}")
 
     if args.search_schedule_mode == 'small_small':
         from ray.tune.search.basic_variant import BasicVariantGenerator
@@ -97,7 +102,12 @@ def get_whisper_hyperparameters(args):
     HYPERPARAMETERS = ['learning_rate', 'warmup_steps', 'weight_decay', 'batch_size', 'scheduler', 'alpha', 'rank']
     train_loop_config_ = {}
     train_loop_config_["per_device_train_batch_size"] = args.per_device_train_batch_size
-    train_loop_config_["warmup_steps"] = 0
+
+    if args.warmup_steps == 0:
+        logger.debug(f"Will do LR warmup of {args.warmup_ratio}%")
+        train_loop_config_["warmup_ratio"] = args.warmup_ratio
+    else:
+        train_loop_config_["warmup_steps"] = args.warmup_stepstrain_loop_config_["warmup_steps"] = args.warmup_steps
 
     for hyper_param in args.hyperparameters[0]:
         logger.debug("Adding hyperparameter %s to the search space", hyper_param)
