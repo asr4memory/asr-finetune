@@ -1,0 +1,9 @@
+{
+  "train_loop_config": {
+    "learning_rate": 0.002764391394717248,
+    "lr_scheduler_type": "linear",
+    "per_device_train_batch_size": 8,
+    "warmup_steps": 10,
+    "weight_decay": 0.019854147119296717
+  }
+}

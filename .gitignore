@@ -20,12 +20,12 @@ __pycache__
 
 *.DS_Store
 
-/finetune/benchmark_results/*
+/finetune/benchmark_dataloaders/benchmark_results/*
 benchmark_dataloader.py
 
 /finetune/configs/cpus_test.config
 
-/finetune/cpus_test.py
+/finetune/benchmark_dataloaders/cpus_test.py
 
 
 
