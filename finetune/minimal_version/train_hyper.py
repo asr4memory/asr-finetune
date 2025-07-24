@@ -211,7 +211,8 @@ if __name__ == "__main__":
         ray_datasets, data_collators = get_datasets_and_collators(dataset_kwargs, in_trainer=False)
         logger.info("Successfully loaded Dataset.")
     except Exception as e:
-        ray_datasets, data_collators = {"train": None, "val": None}, None
+        ray_datasets, data_collators = {}, None
+        # {"train": None, "val": None}
         logger.info(f"Could not load the ray_datasets: {e}")
 
 

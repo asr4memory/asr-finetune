@@ -36,7 +36,7 @@ def get_searcher_and_scheduler(args):
     max_t = steps_per_epoch(args.len_train_set, args.per_device_train_batch_size) * args.num_train_epochs
     max_t_ = args.max_steps
 
-    grace_period = 5000  # int(round(max_t * 0.1)) + 100  # start kick out trials after LR warmup finished
+    grace_period = 1 if args.debug else 5000  # int(round(max_t * 0.1)) + 100  # start kick out trials after LR warmup finished
     #    calculate_grace_period(max_t, warmup_steps = args.warmup_steps,
     #                                          warmup_ratio = args.warmup_ratio,
     #                                          max_warmup_steps = args.max_warmup_steps)
