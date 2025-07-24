@@ -61,7 +61,7 @@ Remark: We use the `gpu-a100:test` [partition for testing](https://nhr-zib.atlas
 
 *Some further notes*: 
 - All relevant files are automatically saved in the scratch folder [/scratch/src/USERNAME/](/scratch/USERNAME/). Results of the 
-submitted job with defined `output_tag` are stored in [/scratch/USERNAME/ray_results/output_tag](/scratch/USERNAME/ray_results/output_tag) and the temporary
+submitted job with d[data_modes.py](finetune%2Fminimal_version%2Fdata_and_collator%2Fdata_modes.py)efined `output_tag` are stored in [/scratch/USERNAME/ray_results/output_tag](/scratch/USERNAME/ray_results/output_tag) and the temporary
 files are automaticall stored in [/scratch/USERNAME/tmp](/scratch/USERNAME/tmp) 
 - For runs on you local machine for debugging, see the next section.
 
@@ -71,7 +71,7 @@ files are automaticall stored in [/scratch/USERNAME/tmp](/scratch/USERNAME/tmp)
 1.[train_single_model.py](finetune%2Ftrain_single_model.py) To track the progress of your experiments, log into you HPC account forwarding port 6007 onto you local machine through
 `ssh -L 16006:127.0.0.1:6007 USER@blogin2.nhr.zib.de`  (if you used `blogin2` as login node).
 
-Run `tensorboard --logdir /scratch/src/$USER/ray_results/output_tag/ --bind_all` where output_tag is again the one from
+Run `tensorboard --logdir /scratch/usr/$USER/ray_results/output_tag/ --bind_all` where output_tag is again the one from
 the config file (e.g. `whisper_large_jan`).
 
 2.  To track more general cluster utility, check the ray dashboard. For that, you need to 

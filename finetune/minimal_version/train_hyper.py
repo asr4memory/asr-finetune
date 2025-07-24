@@ -56,7 +56,8 @@ logger = logging.getLogger(__name__)
 
 # options for different ray searchers and scheduler (see the get_searcher_and_scheduler function for details)
 TUNE_CHOICES = ['small_small', 'large_small_OPTUNA', 'large_large']
-DATA_MODES = ['h5', 'parquet']
+DATA_MODES = ['h5', 'parquet', 'parquet_h5']
+
 def parse_args():
     """ Parses command line arguments for the training.
 
@@ -115,8 +116,6 @@ def parse_args():
     parser.add_argument("--prefetch_batches", type=int, default=1,
                         help="How many batches to prefetch data? Keep in mind: is using VRAM.")
 
-    parser.add_argument("--load_ds_in_trainer", action="store_true", default=False, help="Wheter to load the ds within the "
-                                                                                         "trainer or outside. ")
 
     # tune options: https://docs.ray.io/en/latest/tune/api/doc/ray.tune.TuneConfig.html
     parser.add_argument("--num_samples", type=int, default=5, help="Number of times to sample from the hyperparameter space.")
@@ -207,15 +206,13 @@ if __name__ == "__main__":
 
 
     dataset_kwargs = make_dataset_kwargs(args)
-    if not args.load_ds_in_trainer:
-        try:
-            ray_datasets, data_collators = get_datasets_and_collators(dataset_kwargs)
-            logger.info("Successfully loaded Dataset.")
-        except Exception as e:
-            ray_datasets, data_collators = {}, None
-            logger.info(f"Could not load the ray_datasets: {e}")
-    else:
-        ray_datasets, data_collators = None, dataset_kwargs
+
+    try:
+        ray_datasets, data_collators = get_datasets_and_collators(dataset_kwargs, in_trainer=False)
+        logger.info("Successfully loaded Dataset.")
+    except Exception as e:
+        ray_datasets, data_collators = {"train": None, "val": None}, None
+        logger.info(f"Could not load the ray_datasets: {e}")
 
 
     try:
@@ -246,6 +243,7 @@ if __name__ == "__main__":
     trainer = TorchTrainer(
         partial(train_model,
                 training_kwargs=training_kwargs,
+                dataset_kwargs=dataset_kwargs,
                 data_collators=data_collators,
                 eval_sample_fraction=args.eval_sample_fraction),  # the training function to execute on each worker.
         scaling_config=ScalingConfig(num_workers=args.num_workers,

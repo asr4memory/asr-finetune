@@ -516,7 +516,8 @@ def list_of_strings(arg):
 
 
 def get_datasets_and_collators(args,
-                               test_size=0.2):
+                               test_size=0.2,
+                               in_trainer=False):
     """
     Dataset and Collator loader based on input mode (h5/parquet/folder).
 
@@ -547,53 +548,60 @@ def get_datasets_and_collators(args,
 
     del model
 
-    ray_datasets = {}
-    data_collators = {}
+    ray_datasets = {"train": None, "val": None}
+    data_collators = {"train": None, "val": None}
+
     for dataset_mode, config in data_mode.items():
         logger.info("Getting dataset and collator for %s", dataset_mode)
-        if config["type"] == "parquet":
-            path_to_ds_ = os.path.join(path_to_ds,dataset_mode+"_parquet")
-            if os.path.exists(path_to_ds_):
-                ds = ray.data.read_parquet(path_to_ds_)
-            else:
-                raise Exception(f"{path_to_ds_} does not exists for dataset mode {dataset_mode} and type parquet."
-                       f"Make sure you save your parquet file in the format {dataset_mode}_parquet")
 
-        elif config["type"] == "h5":
-            path_to_ds_ = os.path.join(path_to_ds,dataset_mode+".h5")
-                                                            # "dataset_mode+".h5")
-            if os.path.exists(path_to_ds_):
-                ds = create_ray_indexloader(path_to_ds_, samples=limit_samples)
-            else:
-                raise Exception(f"{path_to_ds_} does not exists for dataset mode {dataset_mode} and type .h5"
-                       f"Make sure you save your .h5 in the format {dataset_mode}.h5")
+        if config["load_in_trainer"] == in_trainer:
+            """Only if we are location of function call coincides with intended loading position
+               are we loading the dataset and collator
+            """
 
-        elif config["type"] == "folder":
-            logger.info("Train Test Split of 80 / 20 %")
-            if os.path.exists(path_to_ds):
-                ds = load_and_prepare_data_from_folders(config["path_to_ds"],
-                                                    feature_extractor,
-                                                    tokenizer,
-                                                    test_size=test_size,
-                                                    seed=seed,
-                                                    mode=dataset_mode)
-            else:
-                raise Exception(f"The folder {config["type"]} does not exists for dataset mode {dataset_mode} and type folder"
-                       f"Make sure you save your audio files in the folder with a corresponding .csv file")
+            if config["type"] == "parquet":
+                path_to_ds_ = os.path.join(path_to_ds,dataset_mode+"_parquet")
+                if os.path.exists(path_to_ds_):
+                    ds = ray.data.read_parquet(path_to_ds_)
+                else:
+                    raise Exception(f"{path_to_ds_} does not exists for dataset mode {dataset_mode} and type parquet."
+                           f"Make sure you save your parquet file in the format {dataset_mode}_parquet")
+
+            elif config["type"] == "h5":
+                path_to_ds_ = os.path.join(path_to_ds,dataset_mode+".h5")
+                                                                # "dataset_mode+".h5")
+                if os.path.exists(path_to_ds_):
+                    ds = create_ray_indexloader(path_to_ds_, samples=limit_samples)
+                else:
+                    raise Exception(f"{path_to_ds_} does not exists for dataset mode {dataset_mode} and type .h5"
+                           f"Make sure you save your .h5 in the format {dataset_mode}.h5")
+
+            elif config["type"] == "folder":
+                logger.info("Train Test Split of 80 / 20 %")
+                if os.path.exists(path_to_ds):
+                    ds = load_and_prepare_data_from_folders(config["path_to_ds"],
+                                                        feature_extractor,
+                                                        tokenizer,
+                                                        test_size=test_size,
+                                                        seed=seed,
+                                                        mode=dataset_mode)
+                else:
+                    raise Exception(f"The folder {config["type"]} does not exists for dataset mode {dataset_mode} and type folder"
+                           f"Make sure you save your audio files in the folder with a corresponding .csv file")
 
 
-        if config["collator"] == "parquet":
-            collator = collate_parquet
+            if config["collator"] == "parquet":
+                collator = collate_parquet
 
-        elif config["collator"] == "streaming":
-            collator =  SimpleStreamingCollator(path_to_ds_, feature_extractor, tokenizer,
-                                                num_workers=num_workers, copy_to_local=False)
+            elif config["collator"] == "streaming":
+                collator =  SimpleStreamingCollator(path_to_ds_, feature_extractor, tokenizer,
+                                                    num_workers=num_workers, copy_to_local=False)
 
-        elif config["collator"] == "folder":
-            collator = DataCollatorSpeechSeq2SeqWithPadding
+            elif config["collator"] == "folder":
+                collator = DataCollatorSpeechSeq2SeqWithPadding
 
-        # pdb.set_trace()
-        ray_datasets[dataset_mode] = ds.limit(limit_samples) if limit_samples>0 else ds
-        data_collators[dataset_mode] = collator
+            # pdb.set_trace()
+            ray_datasets[dataset_mode] = ds.limit(limit_samples) if limit_samples>0 else ds
+            data_collators[dataset_mode] = collator
 
     return ray_datasets, data_collators

@@ -3,6 +3,8 @@ from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 from transformers import TrainerCallback
 import torch
 from transformers import TrainingArguments, TrainerState, TrainerControl
+import json
+
 
 # ------------------------------------------------------------------------------
 # Callback to Save Only Adapter Weights (e.g. for PEFT/LoRA)
@@ -12,7 +14,7 @@ class SavePeftModelCallback(TrainerCallback):
     HuggingFace Trainer callback to save only the adapter model (e.g. LoRA weights)
     and remove the base model weights from checkpoints to save disk space.
     """
-    
+
     def on_save(
             self,
             args: TrainingArguments,
@@ -30,6 +32,7 @@ class SavePeftModelCallback(TrainerCallback):
             os.remove(pytorch_model_path)
         return control
 
+
 # ------------------------------------------------------------------------------
 # Callback to Synchronize Trainer State from Previous Checkpoint
 # ------------------------------------------------------------------------------
@@ -39,7 +42,7 @@ class StepSyncCallback(TrainerCallback):
     Callback to synchronize the training step counter (`state.global_step`)
     with a previously saved checkpoint, for seamless resumption.
     """
-    
+
     def __init__(self, starting_step):
         self.starting_step = starting_step
         self.has_synced = False
@@ -50,6 +53,7 @@ class StepSyncCallback(TrainerCallback):
             # Update the trainer's step counter
             state.global_step = self.starting_step
             self.has_synced = True
+
 
 # ------------------------------------------------------------------------------
 # Checkpoint Loader Utility
@@ -86,7 +90,6 @@ def load_checkpoints(checkpoint_dir):
 
     except Exception as e:
         print(f"Error synchronizing iterator state: {e}")
-
 
 
 # ------------------------------------------------------------------------------

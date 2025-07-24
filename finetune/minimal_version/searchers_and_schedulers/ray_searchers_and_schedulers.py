@@ -1,5 +1,5 @@
 from ray.tune.schedulers import ASHAScheduler
-from utils import steps_per_epoch
+from utils import steps_per_epoch, calculate_grace_period
 
 # Ray stuff
 from ray import tune
@@ -10,49 +10,44 @@ logger = logging.getLogger(__name__)
 
 
 def get_searcher_and_scheduler(args):
-    """STEP 3: Returns Searcher and Scheduler Object
+    """
+    Return the appropriate Ray Tune Search Algorithm and Scheduler for hyperparameter optimization.
 
-   A search algorithm searches the Hyperparameter space for good combinations.
-   A scheduler can early terminate bad trials, pause trials, clone trials, and alter hyperparameters of a running
-   trial.
+    The function selects a search-scheduler pair depending on the problem size and tuning space:
 
-   Different Algorithms for different problem settings are recommended based on whether you problem is small or
-   large, and whether you have many hyperparameter to fine-tune or only a small. Based on that, we implement 4
-   different scenarios:
-      small_small: Small problem for small hyperparameters -> does a brute-force grid-search
-      large_small_BOHB: Large problems (like for whisper) but small Hyperparameters (just a hand full) -> bayesian
-                         optimization which is mathematically optimal
-      large_small_OPTUNA: A variant of the above with a different searcher (but also bayes on Bayesian Optimization)
-      large_large: Population based training for large problems with a  large Hyperparameter space
+    - 'small_small'            → Grid/random search with ASHAScheduler (for small-scale tasks with few HPs)
+    - 'large_small_OPTUNA'     → OptunaSearch + ASHAScheduler (for large-scale tasks with small HP space)
+    - 'large_large'            → Population Based Training (for large-scale tasks with large HP space)
 
-   Note:
-       - The max_t_ paramater, which are the training steps, needs to be specified. However, this number depends on
-       the per_device_train_batch_size which is why we can't search for the optimal batch size at the moment.
-       - We got an error using the default bohb_search function. We fixed this error by defining our own
-         TuneBOHB_fix.
+    Notes:
+        - `max_t_` defines the maximum number of training steps. This is used by all schedulers.
+        - We calculate a grace period for early stopping using heuristics that take into account warmup duration.
 
-   TODO:
-    * Allow for batch size searching. Requires to restructure this function
-    * Test and debug the different Schedulers. So far, I only really used large_small_BOHB
+    Returns:
+        Tuple of (searcher, scheduler): Ray Tune searcher and scheduler objects
 
-   Reference:
+    Reference:
       https://docs.ray.io/en/latest/tune/api/schedulers.html#tune-scheduler-pbt
       https://docs.ray.io/en/latest/tune/faq.html#how-does-early-termination-e-g-hyperband-asha-work
       https://docs.ray.io/en/latest/tune/faq.html#which-search-algorithm-scheduler-should-i-choose
 
-   """
+    """
+    # Compute total training steps based on dataset size and batch size
     max_t = steps_per_epoch(args.len_train_set, args.per_device_train_batch_size) * args.num_train_epochs
     max_t_ = args.max_steps
 
-    grace_period = calculate_grace_period(max_t, warmup_steps = args.warmup_steps,
-                                          warmup_ratio = args.warmup_ratio,
-                                          max_warmup_steps = args.max_warmup_steps)
+    grace_period = 5000  # int(round(max_t * 0.1)) + 100  # start kick out trials after LR warmup finished
+    #    calculate_grace_period(max_t, warmup_steps = args.warmup_steps,
+    #                                          warmup_ratio = args.warmup_ratio,
+    #                                          max_warmup_steps = args.max_warmup_steps)
 
+    # Log the configuration for early stopping
     logger.info(f"Early stopping after {max_t_} steps for scheduler.\n"
                 f"Actualy number of steps: {max_t} \n"
-                f"Fraction we train: {round(100 * max_t / max_t_, 2)} \n \n"
+                f"Fraction we train: {round(100 * max_t_ / max_t, 2)} \n \n"
                 f"Grace Period before scheduler kicks in: {grace_period}")
 
+    # --- Option 1: Basic Variant Generator + ASHAScheduler (Simple brute-force or grid search) ---
     if args.search_schedule_mode == 'small_small':
         from ray.tune.search.basic_variant import BasicVariantGenerator
         scheduler = ASHAScheduler(
@@ -61,7 +56,7 @@ def get_searcher_and_scheduler(args):
             grace_period=args.grace_period,
         )
         searcher = BasicVariantGenerator()
-
+    # --- Option 2: OptunaSearch + ASHAScheduler (Bayesian Optimization with pruning) ---
     elif args.search_schedule_mode == 'large_small_OPTUNA':
         from ray.tune.search.optuna import OptunaSearch
         # https://docs.ray.io/en/latest/tune/api/suggestion.html#tune-optuna
@@ -69,14 +64,14 @@ def get_searcher_and_scheduler(args):
             time_attr="step",
             max_t=max_t_,
             reduction_factor=args.reduction_factor,
-            grace_period=args.grace_period,
+            grace_period=grace_period,
         )
         # metric = args.metric_to_optimize, mode = args.modes
         searcher = tune.search.ConcurrencyLimiter(
             OptunaSearch(metric=args.metric_to_optimize[0], mode=args.modes[0]),
             max_concurrent=args.max_concurrent_trials
         )
-
+    # --- Option 3: Population Based Training (PBT) for wide search spaces ---
     elif args.search_schedule_mode == 'large_large':
         from ray.tune.schedulers import PopulationBasedTraining
         from ray.tune.search.basic_variant import BasicVariantGenerator
@@ -99,33 +94,64 @@ def get_searcher_and_scheduler(args):
 
 
 def get_whisper_hyperparameters(args):
-    HYPERPARAMETERS = ['learning_rate', 'warmup_steps', 'weight_decay', 'batch_size', 'scheduler', 'alpha', 'rank']
+    """
+    Build the Ray Tune parameter search space for Whisper training.
+
+    This function dynamically defines which hyperparameters should be tuned and their search distributions
+    based on the command-line arguments passed via `args.hyperparameters`.
+
+    Supported hyperparameters (defined in HYPERPARAMETERS list):
+        - learning_rate: log-uniform in [1e-5, 1e-1]
+        - warmup_steps: integer in [0, max_warmup_steps]
+        - weight_decay: uniform in [0.0, 0.2]
+        - batch_size: one of [1, 2, 4, 8] (affects `per_device_train_batch_size`)
+        - scheduler: choice of ["linear", "cosine"]
+        - alpha, rank: integers for PEFT-specific settings (e.g., LoRA)
+
+    Returns:
+        dict: Nested config dictionary for Ray Tune with parameter sampling strategies.
+    """
+    HYPERPARAMETERS = ['learning_rate', 'warmup_steps', 'warmup_ratio', 'weight_decay', 'batch_size', 'scheduler',
+                       'alpha', 'rank']
     train_loop_config_ = {}
+    # Add default static batch size, unless overridden by tuning
     train_loop_config_["per_device_train_batch_size"] = args.per_device_train_batch_size
 
+    # Choose between fixed warmup steps or dynamic warmup ratio
     if args.warmup_steps == 0:
-        logger.debug(f"Will do LR warmup of {args.warmup_ratio}%")
+        logger.info(f"Will do LR warmup of {args.warmup_ratio}%")
         train_loop_config_["warmup_ratio"] = args.warmup_ratio
     else:
-        train_loop_config_["warmup_steps"] = args.warmup_stepstrain_loop_config_["warmup_steps"] = args.warmup_steps
+        logger.info(f"Will do LR warmup using {args.warmup_steps} steps")
+        train_loop_config_["warmup_steps"] = args.warmup_steps
 
+    # Dynamically build hyperparameter search space
     for hyper_param in args.hyperparameters[0]:
         logger.debug("Adding hyperparameter %s to the search space", hyper_param)
         assert hyper_param in HYPERPARAMETERS, logger.info("Hyperparameter search for %s not implemented", hyper_param)
 
         if hyper_param == 'learning_rate':
-            train_loop_config_[hyper_param] = tune.loguniform(1e-5, 1e-1)
+            train_loop_config_[hyper_param] = tune.loguniform(5e-6, 1e-4)
+
+        elif hyper_param == 'warmup_ratio':
+            train_loop_config_[hyper_param] = tune.choice([0.01, 0.03, 0.05, 0.1])
+
         elif hyper_param == 'warmup_steps':
-            train_loop_config_[hyper_param] = tune.randint(0, args.max_warmup_steps + 1)
+            train_loop_config_[hyper_param] = tune.choice([100, 500, 1000, 2000])
+
         elif hyper_param == 'batch_size':
             train_loop_config_["per_device_train_batch_size"] = tune.choice([1, 2, 4, 8])
+
         elif hyper_param == 'alpha':
             train_loop_config_[hyper_param] = tune.randint(2, 6)
+
         elif hyper_param == 'rank':
             train_loop_config_[hyper_param] = tune.randint(1, 17)
-        elif hyper_param == "weight_decay":
-            train_loop_config_[hyper_param] = tune.uniform(0.0, 0.2)
-        elif hyper_param == "scheduler":
+
+        elif hyper_param == 'weight_decay':
+            train_loop_config_[hyper_param] = tune.loguniform(1e-6, 1e-2)
+
+        elif hyper_param == 'scheduler':
             # Options: add more if you want!
             # LINEAR = "linear"
             # COSINE = "cosine"

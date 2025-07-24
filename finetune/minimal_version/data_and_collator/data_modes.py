@@ -19,10 +19,12 @@ def get_data_modes(type='h5'):
     if type == 'h5':
         h5_data = {
             "train": {"type": "h5",
-                      "collator": "streaming"
+                      "collator": "streaming",
+                      "load_in_trainer": False
                       },
             "val": {"type": "h5",
-                    "collator": "streaming"
+                    "collator": "streaming",
+                    "load_in_trainer": True
                     }
             }
     # Option 2: Both training and validation use Parquet format with parquet collators
@@ -31,9 +33,11 @@ def get_data_modes(type='h5'):
         h5_data = {
             "train": {"type": "parquet",
                       "collator": "parquet",
+                      "load_in_trainer": False
                       },
             "val": {"type": "parquet",
-                    "collator": "parquet"
+                    "collator": "parquet",
+                    "load_in_trainer": True
                     }
             }
             
@@ -43,10 +47,15 @@ def get_data_modes(type='h5'):
         h5_data = {
             "train": {"type": "parquet",
                       "collator": "parquet",
+                      "load_in_trainer": False
                       },
             "val": {"type": "h5",
-                    "collator": "streaming"
+                    "collator": "streaming",
+                    "load_in_trainer": True
                     }
             }
 
     return h5_data
+
+
+# h5_data = { "train": {"type": "parquet", "collator": "parquet", "load_in_trainer": False}, "val": {"type": "parquet", "collator": "parquet", "load_in_trainer": True}}

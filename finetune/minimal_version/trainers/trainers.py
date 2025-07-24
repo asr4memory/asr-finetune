@@ -445,7 +445,7 @@ def make_seq2seq_training_kwargs(args):
     return training_kwargs
 
 
-def train_whisper_peft_model(config, training_kwargs=None, data_collators=None, eval_sample_fraction=1.0):
+def train_whisper_peft_model(config, training_kwargs=None, dataset_kwargs=None, data_collators=None, eval_sample_fraction=1.0):
     """
     Main training function for Whisper model using PEFT (e.g. LoRA or AdaLoRA) and Ray Tune.
 
@@ -533,21 +533,29 @@ def train_whisper_peft_model(config, training_kwargs=None, data_collators=None, 
     ###############################################################
     # 3. LOAD DATASETS FROM RAY OR FALLBACK TO LOCAL
     ###############################################################
-    if ray.train.get_dataset_shard("train") is not None:
-        print("Fetching dataset shards.")
-        train_ds = ray.train.get_dataset_shard("train")
-        eval_ds = ray.train.get_dataset_shard("val")
+    try:
+        ray_datasets, data_collators_ = get_datasets_and_collators(dataset_kwargs, in_trainer=True)
+    except Exception as e:
+        print(f"Could not load data within Trainer: {e}")
+
+    if ray_datasets("train") is not None:
+        print("Using training set within Trainer")
+        train_ds = ray_datasets["train"]
+        data_collators["train"] = data_collators_["train"]
     else:
-        print(f"Loading dataset within the trainer.")
-        try:
-            dataset_kwargs = data_collators
-            ray_datasets, data_collators = get_datasets_and_collators(dataset_kwargs)
-            train_ds = ray_datasets["train"]
-            eval_ds = ray_datasets["val"]
-            del dataset_kwargs
-            print("Data successfully loaded within the trainer")
-        except Exception as e:
-            print(f"Could not load data: {e}")
+        print("Using pre-loaded Train Ray dataset shards.")
+        train_ds = ray.train.get_dataset_shard("train")
+
+    if ray_datasets("val") is not None:
+        print("Using validation set within Trainer")
+        eval_ds = ray_datasets["val"]
+        data_collators["val"] = data_collators_["val"]
+    else:
+        print("Using pre-loaded Train Ray dataset shards.")
+        train_ds = ray.train.get_dataset_shard("train")
+
+    del dataset_kwargs
+    print("Data successfully configured")
 
     # Wrap Ray Datasets into PyTorch iterable datasets
     train_ds_iterable = train_ds.iter_torch_batches(
@@ -642,7 +650,7 @@ def train_whisper_peft_model(config, training_kwargs=None, data_collators=None, 
         trainer.train()
 
 
-def train_whisper_model(config, training_kwargs=None, data_collators=None, eval_sample_fraction=1.0):
+def train_whisper_model(config, training_kwargs=None, dataset_kwargs=None, data_collators=None, eval_sample_fraction=1.0):
     """
     Main training function for Whisper model without PEFT (LoRA/AdaLoRA), using Hugging Face + Ray Tune.
 
@@ -702,21 +710,29 @@ def train_whisper_model(config, training_kwargs=None, data_collators=None, eval_
     ###############################################################
     # 4. LOAD DATASETS FROM RAY OR LOCAL FALLBACK
     ###############################################################
-    if ray.train.get_dataset_shard("train") is not None:
-        print("Using pre-loaded Ray dataset shards.")
-        train_ds = ray.train.get_dataset_shard("train")
-        eval_ds = ray.train.get_dataset_shard("val")
+    try:
+        ray_datasets, data_collators_ = get_datasets_and_collators(dataset_kwargs, in_trainer=True)
+    except Exception as e:
+        print(f"Could not load data within Trainer: {e}")
+
+    if ray_datasets("train") is not None:
+        print("Using training set within Trainer")
+        train_ds = ray_datasets["train"]
+        data_collators["train"] = data_collators_["train"]
     else:
-        print(f"Loading dataset within the trainer.")
-        try:
-            dataset_kwargs = data_collators
-            ray_datasets, data_collators = get_datasets_and_collators(dataset_kwargs)
-            train_ds = ray_datasets["train"]
-            eval_ds = ray_datasets["val"]
-            del dataset_kwargs
-            print("Data successfully loaded within the trainer")
-        except Exception as e:
-            print(f"Could not load data: {e}")
+        print("Using pre-loaded Train Ray dataset shards.")
+        train_ds = ray.train.get_dataset_shard("train")
+
+    if ray_datasets("val") is not None:
+        print("Using validation set within Trainer")
+        eval_ds = ray_datasets["val"]
+        data_collators["val"] = data_collators_["val"]
+    else:
+        print("Using pre-loaded Train Ray dataset shards.")
+        train_ds = ray.train.get_dataset_shard("train")
+
+    del dataset_kwargs
+    print("Data successfully configured")
 
     # Wrap Ray datasets for PyTorch
     train_ds_iterable = train_ds.iter_torch_batches(
@@ -767,7 +783,7 @@ def train_whisper_model(config, training_kwargs=None, data_collators=None, eval_
     # 7. INITIALIZE THE TRAINER (WITH OR WITHOUT SUBSAMPLING)
     ###############################################################
     if eval_sample_fraction < 1:
-        print(f"Evaluating on random fraction {eval_sample_fraction}%  of {eval_ds.count()}.")
+        print(f"Evaluating on random fraction {eval_sample_fraction}%.")
 
         trainer = Seq2SeqTrainerEvalSampling(
                         eval_sample_fraction=eval_sample_fraction,
