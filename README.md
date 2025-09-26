@@ -1,6 +1,6 @@
 # Installation from scratch
 
-1. Crate a folder of your choice in you $HOME HPC directory.
+1. Create a folder of your choice in you $HOME HPC directory.
 2. Pull the repo into the folder.
 3. Install packages in the [requirements.txt](requirements.txt) in your favorite environment.
    With Conda (tested): 
