@@ -35,18 +35,21 @@ def get_searcher_and_scheduler(args):
     # Compute total training steps based on dataset size and batch size
     max_t = steps_per_epoch(args.len_train_set, args.per_device_train_batch_size) * args.num_train_epochs
     max_t_ = args.max_steps
-
-    grace_period = 1 if args.debug else 5000  # int(round(max_t * 0.1)) + 100  # start kick out trials after LR warmup finished
-    #    calculate_grace_period(max_t, warmup_steps = args.warmup_steps,
-    #                                          warmup_ratio = args.warmup_ratio,
-    #                                          max_warmup_steps = args.max_warmup_steps)
-
+    
+    if logger.isEnabledFor(logging.DEBUG):
+        grace_period = 1
+    else:
+        grace_period = 5000#int(round(max_t * 0.1)) + 100  # start kick out trials after LR warmup finished
+#    calculate_grace_period(max_t, warmup_steps = args.warmup_steps,
+#                                          warmup_ratio = args.warmup_ratio,
+#                                          max_warmup_steps = args.max_warmup_steps)
+    
     # Log the configuration for early stopping
     logger.info(f"Early stopping after {max_t_} steps for scheduler.\n"
                 f"Actualy number of steps: {max_t} \n"
                 f"Fraction we train: {round(100 * max_t_ / max_t, 2)} \n \n"
                 f"Grace Period before scheduler kicks in: {grace_period}")
-
+    
     # --- Option 1: Basic Variant Generator + ASHAScheduler (Simple brute-force or grid search) ---
     if args.search_schedule_mode == 'small_small':
         from ray.tune.search.basic_variant import BasicVariantGenerator
@@ -111,12 +114,11 @@ def get_whisper_hyperparameters(args):
     Returns:
         dict: Nested config dictionary for Ray Tune with parameter sampling strategies.
     """
-    HYPERPARAMETERS = ['learning_rate', 'warmup_steps', 'warmup_ratio', 'weight_decay', 'batch_size', 'scheduler',
-                       'alpha', 'rank']
+    HYPERPARAMETERS = ['learning_rate', 'warmup_steps', 'warmup_ratio', 'weight_decay', 'batch_size', 'scheduler', 'alpha', 'rank']
     train_loop_config_ = {}
     # Add default static batch size, unless overridden by tuning
     train_loop_config_["per_device_train_batch_size"] = args.per_device_train_batch_size
-
+    
     # Choose between fixed warmup steps or dynamic warmup ratio
     if args.warmup_steps == 0:
         logger.info(f"Will do LR warmup of {args.warmup_ratio}%")
@@ -124,7 +126,7 @@ def get_whisper_hyperparameters(args):
     else:
         logger.info(f"Will do LR warmup using {args.warmup_steps} steps")
         train_loop_config_["warmup_steps"] = args.warmup_steps
-
+        
     # Dynamically build hyperparameter search space
     for hyper_param in args.hyperparameters[0]:
         logger.debug("Adding hyperparameter %s to the search space", hyper_param)
@@ -132,22 +134,22 @@ def get_whisper_hyperparameters(args):
 
         if hyper_param == 'learning_rate':
             train_loop_config_[hyper_param] = tune.loguniform(5e-6, 1e-4)
-
+            
         elif hyper_param == 'warmup_ratio':
             train_loop_config_[hyper_param] = tune.choice([0.01, 0.03, 0.05, 0.1])
-
+        
         elif hyper_param == 'warmup_steps':
             train_loop_config_[hyper_param] = tune.choice([100, 500, 1000, 2000])
-
+                                              
         elif hyper_param == 'batch_size':
             train_loop_config_["per_device_train_batch_size"] = tune.choice([1, 2, 4, 8])
-
+            
         elif hyper_param == 'alpha':
             train_loop_config_[hyper_param] = tune.randint(2, 6)
-
+            
         elif hyper_param == 'rank':
             train_loop_config_[hyper_param] = tune.randint(1, 17)
-
+            
         elif hyper_param == 'weight_decay':
             train_loop_config_[hyper_param] = tune.loguniform(1e-6, 1e-2)
 

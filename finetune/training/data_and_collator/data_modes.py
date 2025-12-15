@@ -19,12 +19,10 @@ def get_data_modes(type='h5'):
     if type == 'h5':
         h5_data = {
             "train": {"type": "h5",
-                      "collator": "streaming",
-                      "load_in_trainer": False
+                      "collator": "streaming"
                       },
             "val": {"type": "h5",
-                    "collator": "streaming",
-                    "load_in_trainer": True
+                    "collator": "streaming"
                     }
             }
     # Option 2: Both training and validation use Parquet format with parquet collators
@@ -33,11 +31,9 @@ def get_data_modes(type='h5'):
         h5_data = {
             "train": {"type": "parquet",
                       "collator": "parquet",
-                      "load_in_trainer": False
                       },
             "val": {"type": "parquet",
-                    "collator": "parquet",
-                    "load_in_trainer": True
+                    "collator": "parquet"
                     }
             }
             
@@ -47,15 +43,34 @@ def get_data_modes(type='h5'):
         h5_data = {
             "train": {"type": "parquet",
                       "collator": "parquet",
-                      "load_in_trainer": False
                       },
             "val": {"type": "h5",
-                    "collator": "streaming",
-                    "load_in_trainer": True
+                    "collator": "streaming"
+                    }
+            }
+            
+    elif type == 'train_parquet':
+
+        h5_data = {
+            "train": {"type": "parquet",
+                      "collator": "parquet",
+                      }
+            }
+            
+    elif type == 'val_parquet':
+
+        h5_data = {
+            "val": {"type": "parquet",
+                    "collator": "parquet"
+                    }
+            }
+    
+    elif type == 'val_h5':
+
+        h5_data = {
+            "val": {"type": "h5",
+                    "collator": "streaming"
                     }
             }
 
     return h5_data
-
-
-# h5_data = { "train": {"type": "parquet", "collator": "parquet", "load_in_trainer": False}, "val": {"type": "parquet", "collator": "parquet", "load_in_trainer": True}}

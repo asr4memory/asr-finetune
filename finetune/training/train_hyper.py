@@ -57,7 +57,6 @@ logger = logging.getLogger(__name__)
 # options for different ray searchers and scheduler (see the get_searcher_and_scheduler function for details)
 TUNE_CHOICES = ['small_small', 'large_small_OPTUNA', 'large_large']
 DATA_MODES = ['h5', 'parquet', 'parquet_h5']
-
 def parse_args():
     """ Parses command line arguments for the training.
 
@@ -116,6 +115,8 @@ def parse_args():
     parser.add_argument("--prefetch_batches", type=int, default=1,
                         help="How many batches to prefetch data? Keep in mind: is using VRAM.")
 
+    parser.add_argument("--load_ds_in_trainer", action="store_true", default=False, help="Wheter to load the ds within the "
+                                                                                         "trainer or outside. ")
 
     # tune options: https://docs.ray.io/en/latest/tune/api/doc/ray.tune.TuneConfig.html
     parser.add_argument("--num_samples", type=int, default=5, help="Number of times to sample from the hyperparameter space.")
@@ -158,6 +159,41 @@ def parse_args():
     return args
 
 
+import math
+import ray
+
+def partition_dataset(ds, fraction: float):
+    """
+    Split a Ray Dataset into non-overlapping subsets, each roughly `fraction` of the dataset.
+
+    Args:
+        ds (ray.data.Dataset): The dataset to split.
+        fraction (float): Desired fraction per subset (e.g., 0.05 for ~5%).
+
+    Returns:
+        dict[str, ray.data.Dataset]: Dictionary like {"val_1": ds1, "val_2": ds2, ...}
+    """
+    # Total number of rows (triggers computation once)
+    total_len = ds.count()
+    
+    # Compute number of splits (round up)
+    n_splits = math.ceil(1 / fraction)
+
+    # Get actual per-split size
+    target_size = math.ceil(total_len * fraction)
+
+    # Compute split indices
+    split_indices = [min((i + 1) * target_size, total_len) for i in range(n_splits - 1)]
+
+    # Split the dataset
+    splits = ds.split_at_indices(split_indices)
+
+    # Materialize and name each subset
+    val_sets = {f"val_{i+1}": subset.materialize() for i, subset in enumerate(splits)}
+
+    return val_sets
+
+
 if __name__ == "__main__":
     """Ray Tune Workers Configuration
 
@@ -189,7 +225,12 @@ if __name__ == "__main__":
         args.storage_path = os.path.join(os.getcwd(),"output")
         ray.init()
     else:
-        ray.init("auto")
+        ip_head = os.getenv("ip_head")
+        if not ip_head:
+            raise RuntimeError("Head node address not found in environment variables.")
+        ray.init(address=ip_head)
+#         username = os.getenv("USER")
+#        ray.init("auto")
 
     logger.info("Ray Nodes info: %s", ray.nodes())
     logger.info("Ray Cluster Resources: %s", ray.cluster_resources())
@@ -204,21 +245,48 @@ if __name__ == "__main__":
 
     args.path_to_data = DATA_PATH #os.path.join(DATA_PATH, args.dataset_name)
 
-
+#    args.data_mode = "train_parquet"
+    args.data_mode = "parquet"
     dataset_kwargs = make_dataset_kwargs(args)
+    if not args.load_ds_in_trainer:
+        try:
+            ray_datasets, data_collators = get_datasets_and_collators(dataset_kwargs)
+            
+            dataset_kwargs["data_mode"] = "val_parquet"
+            data_collators["val"] = dataset_kwargs
+            logger.info("Successfully loaded Dataset.")
+        except Exception as e:
+            ray_datasets, data_collators = {}, None
+            logger.info(f"Could not load the ray_datasets: {e}")
+    else:
+        # this is not the right way to do it here TODO: update this to allow mixture dat aloading (within and outside)
+        ray_datasets = {}
+        ray_datasets_, data_collators = get_datasets_and_collators(dataset_kwargs)
+        train_ds = ray_datasets_["train"]
+        val_ds = ray_datasets_["val"]
 
-    try:
-        ray_datasets, data_collators = get_datasets_and_collators(dataset_kwargs, in_trainer=False)
-        logger.info("Successfully loaded Dataset.")
-    except Exception as e:
-        ray_datasets, data_collators = {}, None
-        # {"train": None, "val": None}
-        logger.info(f"Could not load the ray_datasets: {e}")
+        # Split into subsets of ~5% each
+        val_subsets = partition_dataset(val_ds, fraction=0.05)
+        
+        # Merge into main dict
+        ray_datasets = {"train": train_ds, **val_subsets}
+
+#        ray_datasets["val_1"] = ray_datasets_["val"].random_sample(0.05).materialize()
+#        ray_datasets["val_2"] = ray_datasets_["val"].random_sample(0.05).materialize()
+#        ray_datasets["val_3"] = ray_datasets_["val"].random_sample(0.05).materialize()
+        logger.info(f"Created {len(val_subsets)} validation subsets, "
+            f"each about {0.05 * 100:.1f}% of total.")
+#        ray_datasets["val"] = None
+#        data_collators["val"] = None
+#        ray_datasets, data_collators = None, dataset_kwargs
 
 
     try:
         args.len_train_set = ray_datasets["train"].count()
         logger.info('len_train_set: %s', args.len_train_set)
+        logger.info('len_test_set: %s', ray_datasets["val_3"].count())
+        logger.info('len_test_set: %s', ray_datasets["val_2"].count())
+        logger.info('len_test_set: %s', ray_datasets["val_1"].count())
     except Exception as e:
         logger.info(f"ray_datasets does not have key train or \n "
               f"was not able to .count() length: {e}")
@@ -244,9 +312,10 @@ if __name__ == "__main__":
     trainer = TorchTrainer(
         partial(train_model,
                 training_kwargs=training_kwargs,
-                dataset_kwargs=dataset_kwargs,
                 data_collators=data_collators,
-                eval_sample_fraction=args.eval_sample_fraction),  # the training function to execute on each worker.
+                eval_sample_fraction=args.eval_sample_fraction,
+                eval_names = list(val_subsets.keys())
+                ),  # the training function to execute on each worker.
         scaling_config=ScalingConfig(num_workers=args.num_workers,
                                      use_gpu=args.use_gpu,
                                      resources_per_worker = resources_per_trial,
@@ -274,7 +343,7 @@ if __name__ == "__main__":
 
     References:
         [1] https://docs.ray.io/en/latest/tune/api/doc/ray.tune.Tuner.html
-        [2] https://docs.ray.io/en/latest/tune/tutorials/tune-fault-tolerance.html#tune-fault-tolerance-ref 
+        [2] https://docs.ray.io/en/latest/tune/tutorials/tune-fault-tolerance.html#tune-fault-tolerance-ref
     """
 
     if args.resume_training:

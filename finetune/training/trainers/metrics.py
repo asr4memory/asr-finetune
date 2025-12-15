@@ -74,5 +74,20 @@ def get_metric_to_optimize(which_metric, tokenizer = None):
 
         return compute_metrics
     
+    elif which_metric == "evaluate_wer":
+    
+        try:
+            metric = evaluate.load(os.path.join(TRAINERS_PATH,"wer.py"))
+        except Exception as e:
+            print(f"Evaluate.load failed: {e}"
+                  f"Trying to load wer metric locally", flush=True)
+            try:
+                metric = evaluate.load("wer.py")
+            except Exception as e:
+                print(f"Save the wer.py in the trainers dir: {e}", flush=True)
+        
+        print("Succesfully retruend evaluate metric")
+        return metric
+        
     else:
         raise ValueError(f"Unsupported metric: {which_metric}")

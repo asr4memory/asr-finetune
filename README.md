@@ -10,8 +10,9 @@ So you need to ssh in ```USERNAME@blogin2.nhr.zib.de``` for example, [see here](
    For example, ```module load anaconda3/2023.09``` and then 
    - `conda create -n "finetune" python=3.12.7`  change "finetune" to your environment name of choice
      (if you change the conda environment name, you need to change it in the `.sh` scripts as well!)
+   - Activate the environment `conda activate finetune`
    - navigate into the asr-finetune folder and `pip install -r requirements.txt`
-4. Install soundfile from anaconda: `conda install -c conda-forge libsndfile`
+   - Install soundfile from anaconda: `conda install -c conda-forge libsndfile`
 
 # Storage on Zuse-HPC
 There are 3 types of storage systems: 
@@ -22,9 +23,10 @@ There are 3 types of storage systems:
 
 There are different quotas for each system, have a look [here](https://nhr-zib.atlassian.net/wiki/spaces/PUB/pages/428627/System+Quota).
 Important for us: WORK is designed for fast I/O operations so it makes sense to save data there.
-Also: with the new code, we need to pre-download the model to finetune.s
-To avoid unnessary data storage, we can share both data and models in our project directory (requested one, but no answer
-so far). Save your data in ```/scratch/usr/$USER/data``` until we have a project directory.
+Also: with the new code, we need to pre-download the model to finetune.
+To avoid unnessary data storage, we can share both data and models in our project directory. 
+Our data ist stored in ```/scratch/usr/bemchrvt/data``` until we have a project directory.
+
 
 In PERM, we can store fine-tuned models. 
 
@@ -42,7 +44,6 @@ Different to the FU-Cluster, we need to pre-download the Whisper Model. For that
    type `python` into the terminal, and then `import evaluate` and then `metric = evaluate.load("wer")`. This should
    start a download of the metric. After that, stop `python` and proceed to the first job submission!
 
-This is a prelimerary solution until we have a shared project folder.
 
 # First job submission 
 
@@ -61,7 +62,7 @@ Remark: We use the `gpu-a100:test` [partition for testing](https://nhr-zib.atlas
 
 *Some further notes*: 
 - All relevant files are automatically saved in the scratch folder [/scratch/src/USERNAME/](/scratch/USERNAME/). Results of the 
-submitted job with d[data_modes.py](finetune%2Fminimal_version%2Fdata_and_collator%2Fdata_modes.py)efined `output_tag` are stored in [/scratch/USERNAME/ray_results/output_tag](/scratch/USERNAME/ray_results/output_tag) and the temporary
+submitted job with [data_modes.py](finetune%2Fminimal_version%2Fdata_and_collator%2Fdata_modes.py)efined `output_tag` are stored in [/scratch/USERNAME/ray_results/output_tag](/scratch/USERNAME/ray_results/output_tag) and the temporary
 files are automaticall stored in [/scratch/USERNAME/tmp](/scratch/USERNAME/tmp) 
 - For runs on you local machine for debugging, see the next section.
 
@@ -100,3 +101,11 @@ for undertanding the tensorboard loggings)
 We follow the tutorial from [here](https://github.com/Vaibhavs10/fast-whisper-finetuning).
 In short: PEFT allows to train large models on small resources as not all but only a fraction of the parameters are 
 trained. 
+
+
+
+# UPDATES 19.10
+
+[//]: # (PATH are now defined in projects_paths and should be adjusted there)
+
+[ ] Add datasets parquet preparation (materialize_ds.sh in curta zedat)

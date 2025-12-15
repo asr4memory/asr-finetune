@@ -36,7 +36,12 @@ except ImportError as e:
     TRANSFORMERS_IMPORT_ERROR = e
     TrainerCallback = object
 
-
+from torch.utils.data import DataLoader
+from typing import Optional
+import random
+import os
+import glob
+import ray
 
 @PublicAPI(stability="beta")
 class RayTrainReportCallback(TrainerCallback):
@@ -122,7 +127,7 @@ class RayTorchIterableDataset(IterableDataset):
 
 
 @PublicAPI(stability="beta")
-def prepare_trainer_custom(trainer: "Trainer") -> "Trainer":
+def prepare_trainer_custom2(trainer: "Trainer") -> "Trainer":
     """
     Prepares a Hugging Face Trainer for use with Ray streaming datasets.
 
@@ -153,28 +158,226 @@ def prepare_trainer_custom(trainer: "Trainer") -> "Trainer":
             else:
                 return super().get_train_dataloader()
 
-        def get_eval_dataloader(
-            self, eval_dataset: Optional[Dataset] = None
-        ) -> DataLoader:
-            if eval_dataset is None:
-                eval_dataset = self.eval_dataset
 
-            print(f"subsampling {self.eval_sample_fraction} %")
-            print(f"self.prefetch_batches {self.prefetch_batches}")
-            print(f"per_device_eval_batch_size, {self.args.per_device_eval_batch_size}")
-            subsampled = self.eval_dataset.random_sample(self.eval_sample_fraction)
-            
+        def get_eval_dataloader(self, eval_dataset: Optional[Dataset] = None) -> DataLoader:
+            # 1) Where to get candidate files from?
+            #    - Prefer explicit list on the trainer: self.eval_parquet_paths = ["/path/a.parquet", ...]
+            #    - Or a directory: self.eval_parquet_dir = "/path/to/val_parquet"
+            #    - Otherwise fall back to the existing dataset-based subsampling.
+
+            seed = getattr(self.args, "seed", None)
+            if seed is not None:
+                random.seed(seed + int(getattr(self.state, "global_step", 0) or 0))  # vary across evals but reproducible
+
+            file_candidates = []
+#            self.eval_parquet_dir = r"/scratch/usr/bemchrvt/data/eg_dataset_complete_v3_sharded"
+            if hasattr(self, "eval_parquet_paths") and self.eval_parquet_paths:
+                file_candidates = list(self.eval_parquet_paths)
+            elif hasattr(self, "eval_parquet_dir") and self.eval_parquet_dir and os.path.isdir(self.eval_parquet_dir):
+                file_candidates = sorted(glob.glob(os.path.join(self.eval_parquet_dir, "*.parquet")))
+
+            if file_candidates:
+                chosen_path = random.choice(file_candidates)
+                print(f"[Eval] Using single Parquet file: {chosen_path}")
+                # disable PG capture just around the read
+
+                import ray
+                import time, psutil
+                # A tiny helper that runs OUTSIDE the trial PG
+#                @ray.remote(num_cpus=4, scheduling_strategy="DEFAULT")
+                from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
+
+                @ray.remote(num_cpus=1,  # keep this small
+                scheduling_strategy=PlacementGroupSchedulingStrategy(placement_group=None))
+                def _build_eval_ds(path: str, parallelism: int = 2):
+                    # Fan out across free CPUs on the node
+                    print(f"[Eval] Read Parquet at {time.ctime()} ")
+                    
+                    proc = psutil.Process(os.getpid())
+                    print(f"[Eval] PID {os.getpid()} started with CPU quota={os.environ.get('CPU_REQUESTED', 'N/A')} at {time.ctime()}")
+
+
+                    ds = ray.data.read_parquet(
+                        path,
+                        parallelism=parallelism,
+                        ray_remote_args={"num_cpus": 0.25} #, "scheduling_strategy": "DEFAULT"},
+                    )
+                    return ds.materialize()  # Execute now so blocks are built outside the PG
+                
+                # Build eval dataset OUTSIDE the trial's placement group
+                ds_ref = _build_eval_ds.remote(chosen_path, parallelism=4)
+                subsampled = ray.get(ds_ref)
+
+            else:
+                # Fallback: your old behavior (fractional subsample of the whole dataset)
+                if eval_dataset is None:
+                    eval_dataset = self.eval_dataset
+                print(f"[Eval] Using fallback subsampling {self.eval_sample_fraction}")
+                subsampled = eval_dataset.random_sample(self.eval_sample_fraction, seed=seed)
+
+            # 2) Build the iterator and wrap in a tiny DataLoader that yields the Ray batches directly.
+            print(f"[Eval]: Set up Eval Iterator")
             eval_dataset_iter = subsampled.iter_torch_batches(
                 prefetch_batches=self.prefetch_batches,
-                batch_size=self.args.per_device_eval_batch_size, collate_fn=self.eval_collator)
-
+                batch_size=self.args.per_device_eval_batch_size,
+                collate_fn=self.eval_collator,
+            )
+            print(f"[Eval]: That took long!")
             if isinstance(eval_dataset_iter, _IterableFromIterator):
                 dataset = RayTorchIterableDataset(eval_dataset_iter)
                 return DataLoader(dataset, batch_size=1, collate_fn=lambda x: x[0])
             else:
+                # Shouldn’t happen with Ray iterators, but keep the original fallback just in case.
                 return super().get_eval_dataloader(eval_dataset)
+
+#        def get_eval_dataloader(
+#            self, eval_dataset: Optional[Dataset] = None
+#        ) -> DataLoader:
+#            if eval_dataset is None:
+#                eval_dataset = self.eval_dataset
+#
+#            print(f"subsampling {self.eval_sample_fraction} %")
+#            print(f"self.prefetch_batches {self.prefetch_batches}")
+#            print(f"per_device_eval_batch_size, {self.args.per_device_eval_batch_size}")
+#            subsampled = self.eval_dataset.random_sample(self.eval_sample_fraction)
+#            
+#            eval_dataset_iter = subsampled.iter_torch_batches(
+#                prefetch_batches=self.prefetch_batches,
+#                batch_size=self.args.per_device_eval_batch_size, collate_fn=self.eval_collator)
+#                
+#            print(f"Eval Dataset subsampled and ready to be evaluated on!")
+#            
+#            if isinstance(eval_dataset_iter, _IterableFromIterator):
+#                dataset = RayTorchIterableDataset(eval_dataset_iter)
+#                return DataLoader(dataset, batch_size=1, collate_fn=lambda x: x[0])
+#            else:
+#                return super().get_eval_dataloader(eval_dataset)
 
     trainer.__class__ = RayTransformersTrainer
 
+    record_extra_usage_tag(TagKey.TRAIN_TRANSFORMERS_PREPARE_TRAINER, "1")
+    return trainer
+
+
+
+@PublicAPI(stability="beta")
+def prepare_trainer_custom(trainer: "Trainer") -> "Trainer":
+    """
+    Hugging Face Trainer shim for Ray Datasets when the *evaluation* dataset
+    is already loaded and materialized outside the TorchTrainer.
+
+    Usage expectations:
+      - trainer.train_dataset  may be a Ray iterator OR plain HF dataset.
+      - trainer.eval_dataset   MUST be a ray.data.Dataset (materialized).
+      - trainer.eval_collator  is your collator for eval batches.
+      - Optional knobs you can set on the trainer *before* training:
+          * trainer.eval_sample_fraction: float in (0,1] (default=1.0)
+          * trainer.eval_num_examples:   int, overrides fraction if set
+          * trainer.prefetch_batches:    int, dataloader prefetch (default=1)
+    """
+    if TRANSFORMERS_IMPORT_ERROR is not None:
+        raise TRANSFORMERS_IMPORT_ERROR
+
+    base_cls: Type[transformers.trainer.Trainer] = trainer.__class__
+
+    class RayTransformersTrainer(base_cls):
+        # ---- helpers ---------------------------------------------------------
+        @property
+        def _eval_fraction(self) -> float:
+            frac = getattr(self, "eval_sample_fraction", 1.0)
+            # clamp to sane range
+            try:
+                frac = float(frac)
+                if frac <= 0 or frac > 1:
+                    frac = 1.0
+            except Exception:
+                frac = 1.0
+            return frac
+
+        def _choose_eval_subset(self, ds):
+            """
+            Return a (possibly) sub-sampled Ray Dataset, determined at each
+            evaluate() call. Uses seed that changes with global_step for
+            reproducibility across calls.
+            """
+            # vary the seed across evals but deterministic for given step
+            base_seed = getattr(self.args, "seed", 0) or 0
+            step = int(getattr(self.state, "global_step", 0) or 0)
+            seed = base_seed + step
+
+            # exact-N takes precedence if provided
+            n_examples = getattr(self, "eval_num_examples", None)
+            if isinstance(n_examples, int) and n_examples > 0:
+                # Prefer randomized block order without a full shuffle: sample a fraction,
+                # then trim with .limit(). We avoid .random_shuffle() because it can be slow.
+                # Heuristic fraction: oversample a bit to counter randomness on small N.
+                # We cache total rows once if available.
+                total = getattr(self, "_eval_total_rows", None)
+                if total is None:
+                    try:
+                        # This count is cheap if the dataset is materialized; we cache it.
+                        total = ds.count()
+                        setattr(self, "_eval_total_rows", total)
+                    except Exception:
+                        total = None
+
+                if total and total > 0:
+                    frac = min(1.0, max(0.0, 1.2 * float(n_examples) / float(total)))
+                    sub = ds.random_sample(frac, seed=seed).limit(n_examples)
+                else:
+                    # Fallback: just limit() (may take first N in block order)
+                    # Adding a tiny random_sample jitters block selection a bit.
+                    sub = ds.random_sample(0.5, seed=seed).limit(n_examples)
+                return sub
+
+            # otherwise: fraction mode
+            frac = self._eval_fraction
+            if frac < 1.0:
+                return ds.random_sample(frac, seed=seed)
+            return ds
+
+        # ---- dataloaders -----------------------------------------------------
+        def get_train_dataloader(self) -> DataLoader:
+            # If Ray is already giving us an iterator that yields *batched* tensors,
+            # we wrap it so HF DataLoader doesn't re-batch it.
+            if isinstance(self.train_dataset, _IterableFromIterator):
+                dataset = RayTorchIterableDataset(self.train_dataset)
+                # batch_size=1 + identity collate: each item is already a full batch
+                return DataLoader(dataset, batch_size=1, collate_fn=lambda x: x[0])
+            return super().get_train_dataloader()
+
+        def get_eval_dataloader(self, eval_dataset: Optional[Dataset] = None) -> DataLoader:
+            # We expect a Ray Dataset here (materialized). If caller passes something,
+            # prefer that; else use self.eval_dataset.
+            ds = eval_dataset if eval_dataset is not None else self.eval_dataset
+
+            # If the user passed an HF dataset/iterator by accident, fall back.
+            try:
+                import ray.data
+                is_ray_ds = isinstance(ds, ray.data.Dataset)
+            except Exception:
+                is_ray_ds = False
+
+            if not is_ray_ds:
+                # fall back to stock behavior (e.g., unit tests)
+                return super().get_eval_dataloader(eval_dataset)
+
+            # Subsample freshly on every evaluate() call
+            sub = self._choose_eval_subset(ds)
+            print("[Eval]: Length eval dataset ", ds.count())
+            
+            prefetch = getattr(self, "prefetch_batches", 1)
+            collator = getattr(self, "eval_collator", None)
+
+            # Build a Ray → Torch iterator (already yields full batches)
+            iter_batches = sub.iter_torch_batches(
+                prefetch_batches=prefetch,
+                batch_size=self.args.per_device_eval_batch_size,
+                collate_fn=collator,
+            )
+            wrapped = RayTorchIterableDataset(iter_batches)
+            return DataLoader(wrapped, batch_size=1, collate_fn=lambda x: x[0])
+
+    trainer.__class__ = RayTransformersTrainer
     record_extra_usage_tag(TagKey.TRAIN_TRANSFORMERS_PREPARE_TRAINER, "1")
     return trainer

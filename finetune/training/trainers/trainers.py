@@ -65,6 +65,7 @@ from .metrics import get_metric_to_optimize
 from utils import  steps_per_epoch, normalize
 
 from transformers.trainer_utils import EvalLoopOutput
+import random
 
 class Seq2SeqTrainerEvalSampling(Seq2SeqTrainer):
     """
@@ -98,9 +99,30 @@ class Seq2SeqTrainerEvalSampling(Seq2SeqTrainer):
         Run evaluation and return metrics, optionally computing a custom eval_loss_wer.
         """
         print("I AM HERE!")
+#        ds = eval_dataset if eval_dataset is not None else self.eval_dataset
+#        
+#        # Your dictionary
+#        eval_shards = {"1": eval_ds_1, "2": eval_ds_2, "3": eval_ds_3}
+
+        # Pick a random key
+        random_key = random.choice(list(self.eval_shards.keys()))
+
+        # Get the corresponding dataset
+        random_ds = self.eval_shards[random_key]
+        ds = random_ds.iter_torch_batches(
+                        prefetch_batches = self.prefetch_batches,
+                        batch_size=self.args.per_device_eval_batch_size,
+                        collate_fn=self.eval_collator
+                        )
+
+        print(f"[Eval]: Selected shard: {random_key}")
+
+        print("[Eval]: Print eval dataset ", ds)
+#        print("Length eval dataset ", ds.count())
+        
         self._max_length = max_length if max_length is not None else self.args.generation_max_length
         self._num_beams = num_beams if num_beams is not None else self.args.generation_num_beams
-        metrics = super().evaluate(eval_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix)
+        metrics = super().evaluate(ds, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix)
         
         if "eval_loss" in metrics and "eval_wer" in metrics:
             beta = self.wer_weight
@@ -118,7 +140,9 @@ class Seq2SeqTrainerEvalSampling(Seq2SeqTrainer):
 import torch
 import torch.nn as nn
 
-class Seq2SeqTrainerEvalSamplingPeft(Seq2SeqTrainer):
+from .custom_seq2seq_trainers import Seq2SeqTrainerEvalSamplingPeft
+
+class Seq2SeqTrainerEvalSamplingPeft_old(Seq2SeqTrainer):
 
     def __init__(self, *args, eval_sample_fraction=0.1, prefetch_batches = 1, eval_collator=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -445,7 +469,7 @@ def make_seq2seq_training_kwargs(args):
     return training_kwargs
 
 
-def train_whisper_peft_model(config, training_kwargs=None, dataset_kwargs=None, data_collators=None, eval_sample_fraction=1.0):
+def train_whisper_peft_model(config, training_kwargs=None, data_collators=None, eval_sample_fraction=1.0, eval_names=None):
     """
     Main training function for Whisper model using PEFT (e.g. LoRA or AdaLoRA) and Ray Tune.
 
@@ -533,38 +557,66 @@ def train_whisper_peft_model(config, training_kwargs=None, dataset_kwargs=None, 
     ###############################################################
     # 3. LOAD DATASETS FROM RAY OR FALLBACK TO LOCAL
     ###############################################################
-    try:
-        ray_datasets, data_collators_ = get_datasets_and_collators(dataset_kwargs, in_trainer=True)
-    except Exception as e:
-        print(f"Could not load data within Trainer: {e}")
-
-    if ray_datasets("train") is not None:
-        print("Using training set within Trainer")
-        train_ds = ray_datasets["train"]
-        data_collators["train"] = data_collators_["train"]
-    else:
-        print("Using pre-loaded Train Ray dataset shards.")
+    ###############################################################
+    # 4. LOAD DATASETS FROM RAY OR LOCAL FALLBACK
+    ###############################################################
+    if ray.train.get_dataset_shard("train") is not None:
         train_ds = ray.train.get_dataset_shard("train")
-
-    if ray_datasets("val") is not None:
-        print("Using validation set within Trainer")
-        eval_ds = ray_datasets["val"]
-        data_collators["val"] = data_collators_["val"]
+            # Collect validation shards dynamically
+        eval_shards = {
+            name.split("_")[-1]: ray.train.get_dataset_shard(name)
+            for name in eval_names
+        }
+            
+        print("Using pre-loaded Ray dataset shards.")
+#        print("Using pre-loaded Ray dataset shards.")
+#        train_ds = ray.train.get_dataset_shard("train")
+#        
+#        print("Getting eval dataset withing trainer.")
+#        ray_datasets, data_collators_ = get_datasets_and_collators(data_collators["val"])
+#        
+#        eval_ds = ray_datasets["val"]
+#        data_collators["val"] = data_collators_["val"]
+#        eval_ds = ray.train.get_dataset_shard("val")
     else:
-        print("Using pre-loaded Train Ray dataset shards.")
-        train_ds = ray.train.get_dataset_shard("train")
+        print(f"Loading dataset within the trainer.")
+        try:
+            dataset_kwargs = data_collators
+            ray_datasets, data_collators = get_datasets_and_collators(dataset_kwargs)
+            train_ds = ray_datasets["train"]
+            eval_ds = ray_datasets["val"]
+            del dataset_kwargs
+            print("Data successfully loaded within the trainer")
+        except Exception as e:
+            print(f"Could not load data: {e}")
 
-    del dataset_kwargs
-    print("Data successfully configured")
-
-    # Wrap Ray Datasets into PyTorch iterable datasets
+    # Wrap Ray datasets for PyTorch
     train_ds_iterable = train_ds.iter_torch_batches(
-        prefetch_batches=training_kwargs["prefetch_batches"],
+        prefetch_batches = training_kwargs["prefetch_batches"],
         batch_size=config["per_device_train_batch_size"], collate_fn=data_collators["train"])
 
-    eval_ds_iterable = eval_ds.iter_torch_batches(
-        prefetch_batches=training_kwargs["prefetch_batches"],
-        batch_size=training_kwargs["per_device_eval_batch_size"], collate_fn=data_collators["val"])
+#    eval_ds_iterable = eval_ds.iter_torch_batches(
+#        prefetch_batches = training_kwargs["prefetch_batches"],
+#        batch_size=training_kwargs["per_device_eval_batch_size"], collate_fn=data_collators["val"])
+    
+    
+    
+#    if ray.train.get_dataset_shard("train") is not None:
+#        print("Fetching dataset shards.")
+#        train_ds = ray.train.get_dataset_shard("train")
+#        eval_ds = ray.train.get_dataset_shard("val")
+#    else:
+#        print(f"Loading dataset within the trainer.")
+#        try:
+#            dataset_kwargs = data_collators
+#            ray_datasets, data_collators = get_datasets_and_collators(dataset_kwargs)
+#            train_ds = ray_datasets["train"]
+#            eval_ds = ray_datasets["val"]
+#            del dataset_kwargs
+#            print("Data successfully loaded within the trainer")
+#        except Exception as e:
+#            print(f"Could not load data: {e}")
+
 
     ###############################################################
     # 4. CLEAN UP ARGS AND INITIALIZE TRAINER
@@ -574,6 +626,9 @@ def train_whisper_peft_model(config, training_kwargs=None, dataset_kwargs=None, 
 #    compute_metrics = get_metric_to_optimize("wer", tokenizer=tokenizer)
 
     # Remove unused entries from kwargs
+    del training_kwargs["model_type"]
+    wer_weight_ = training_kwargs["wer_weight"]
+    del training_kwargs["wer_weight"]
     del training_kwargs["target_language"]
     del training_kwargs["return_timestamps"]
     del training_kwargs["run_on_local_machine"]
@@ -605,13 +660,16 @@ def train_whisper_peft_model(config, training_kwargs=None, dataset_kwargs=None, 
     # 5. INITIALIZE CUSTOM OR STANDARD TRAINER
     ###############################################################
     if eval_sample_fraction < 1:
-        print(f"Evaluating on random fraction {eval_sample_fraction}%  of {eval_ds.count()}.")
+        print(f"Evaluating on random fraction {eval_sample_fraction}%.")
 
-        trainer = Seq2SeqTrainerEvalSampling(
+        trainer = Seq2SeqTrainerEvalSamplingPeft(
+                        processor=processor,
+                        tokenizer=tokenizer,
                         eval_sample_fraction=eval_sample_fraction,
                         prefetch_batches=prefetch_batches_,
-                        eval_dataset=eval_ds,
+                        eval_dataset=eval_shards["1"],
                         eval_collator=data_collators["val"],
+                        wer_weight = wer_weight_,
                         args=training_args,
                         model=model,
                         train_dataset=train_ds_iterable,
@@ -620,6 +678,8 @@ def train_whisper_peft_model(config, training_kwargs=None, dataset_kwargs=None, 
                         callbacks=callbacks_
                         # tokenizer=tokenizer,
                   )
+        
+        trainer.eval_shards = eval_shards
 
     else:
         trainer = Seq2SeqTrainer(
@@ -638,7 +698,19 @@ def train_whisper_peft_model(config, training_kwargs=None, dataset_kwargs=None, 
     if starting_step > 0:
         trainer.add_callback(StepSyncCallback(starting_step))
 
-    trainer = prepare_trainer_custom(trainer)
+    trainer = prepare_trainer(trainer)
+    
+    print("process_index:", trainer.args.process_index,
+      "world_size:", trainer.args.world_size,
+      "should_save:", trainer.args.should_save,
+      "output_dir:", trainer.args.output_dir)
+    print("save_strategy:", trainer.args.save_strategy, "save_steps:", trainer.args.save_steps)
+
+    print("save_strategy:", trainer.args.save_strategy,
+      "save_steps:", trainer.args.save_steps,
+      "eval_steps:", trainer.args.eval_steps,
+      "max_steps:", trainer.args.max_steps)
+    print("global_step:", trainer.state.global_step)
 
     ###############################################################
     # 6. START TRAINING
@@ -650,7 +722,7 @@ def train_whisper_peft_model(config, training_kwargs=None, dataset_kwargs=None, 
         trainer.train()
 
 
-def train_whisper_model(config, training_kwargs=None, dataset_kwargs=None, data_collators=None, eval_sample_fraction=1.0):
+def train_whisper_model(config, training_kwargs=None, data_collators=None, eval_sample_fraction=1.0, eval_names=None):
     """
     Main training function for Whisper model without PEFT (LoRA/AdaLoRA), using Hugging Face + Ray Tune.
 
@@ -710,38 +782,54 @@ def train_whisper_model(config, training_kwargs=None, dataset_kwargs=None, data_
     ###############################################################
     # 4. LOAD DATASETS FROM RAY OR LOCAL FALLBACK
     ###############################################################
-    try:
-        ray_datasets, data_collators_ = get_datasets_and_collators(dataset_kwargs, in_trainer=True)
-    except Exception as e:
-        print(f"Could not load data within Trainer: {e}")
-
-    if ray_datasets("train") is not None:
-        print("Using training set within Trainer")
-        train_ds = ray_datasets["train"]
-        data_collators["train"] = data_collators_["train"]
-    else:
-        print("Using pre-loaded Train Ray dataset shards.")
+    if ray.train.get_dataset_shard("train") is not None:
         train_ds = ray.train.get_dataset_shard("train")
-
-    if ray_datasets("val") is not None:
-        print("Using validation set within Trainer")
-        eval_ds = ray_datasets["val"]
-        data_collators["val"] = data_collators_["val"]
+            # Collect validation shards dynamically
+        eval_shards = {
+            name.split("_")[-1]: ray.train.get_dataset_shard(name)
+            for name in eval_names
+        }
+            
+        print("Using pre-loaded Ray dataset shards.")
+#        ctx = ray.train.get_context()
+#        eval_shards = {
+#            name.split("_")[-1]: ray.train.get_dataset_shard(name)
+#            for name in ctx.get_dataset_config().keys()
+#            if name.startswith("val_")
+#        }
+#        eval_ds_1 = ray.train.get_dataset_shard("val_1")
+#        eval_ds_2 = ray.train.get_dataset_shard("val_2")
+#        eval_ds_3 = ray.train.get_dataset_shard("val_3")
+#        eval_shards = {"1": eval_ds_1, "2": eval_ds_2, "3": eval_ds_3}
+        
+        
+#        print("Getting eval dataset within trainer.")
+#        ray_datasets, data_collators_ = get_datasets_and_collators(data_collators["val"])
+#        
+#        eval_ds = ray_datasets["val"]
+#        print("eval ds", eval_ds.count())
+#        data_collators["val"] = data_collators_["val"]
+#        eval_ds = ray.train.get_dataset_shard("val")
     else:
-        print("Using pre-loaded Train Ray dataset shards.")
-        train_ds = ray.train.get_dataset_shard("train")
-
-    del dataset_kwargs
-    print("Data successfully configured")
+        print(f"Loading dataset within the trainer.")
+        try:
+            dataset_kwargs = data_collators
+            ray_datasets, data_collators = get_datasets_and_collators(dataset_kwargs)
+            train_ds = ray_datasets["train"]
+            eval_ds = ray_datasets["val"]
+            del dataset_kwargs
+            print("Data successfully loaded within the trainer")
+        except Exception as e:
+            print(f"Could not load data: {e}")
 
     # Wrap Ray datasets for PyTorch
     train_ds_iterable = train_ds.iter_torch_batches(
         prefetch_batches = training_kwargs["prefetch_batches"],
         batch_size=config["per_device_train_batch_size"], collate_fn=data_collators["train"])
 
-    eval_ds_iterable = eval_ds.iter_torch_batches(
-        prefetch_batches = training_kwargs["prefetch_batches"],
-        batch_size=training_kwargs["per_device_eval_batch_size"], collate_fn=data_collators["val"])
+#    eval_ds_iterable = eval_ds.iter_torch_batches(
+#        prefetch_batches = training_kwargs["prefetch_batches"],
+#        batch_size=training_kwargs["per_device_eval_batch_size"], collate_fn=data_collators["val"])
 
     ###############################################################
     # 5. CLEAN UP TRAINING KWARGS AND CONFIG
@@ -788,7 +876,7 @@ def train_whisper_model(config, training_kwargs=None, dataset_kwargs=None, data_
         trainer = Seq2SeqTrainerEvalSampling(
                         eval_sample_fraction=eval_sample_fraction,
                         prefetch_batches=prefetch_batches_,
-                        eval_dataset=eval_ds,
+                        eval_dataset=eval_shards["1"], #eval_ds_iterable, eval_ds #,
                         eval_collator=data_collators["val"],
                         wer_weight = wer_weight_,
                         args=training_args,
@@ -799,7 +887,11 @@ def train_whisper_model(config, training_kwargs=None, dataset_kwargs=None, data_
                         callbacks=None
                         # tokenizer=tokenizer,
                   )
+        trainer.eval_shards = eval_shards
+        trainer.eval_parquet_dir = "/scratch/usr/bemchrvt/data/eg_dataset_complete_v3_sharded/val_parquet"
+
     else:
+        # Should not be Seq2SeqTrainer!
         trainer = Seq2SeqTrainer(
                     args=training_args,
                     model=model,
@@ -818,8 +910,22 @@ def train_whisper_model(config, training_kwargs=None, dataset_kwargs=None, data_
 
     if starting_step > 0:
         trainer.add_callback(StepSyncCallback(starting_step))
+    
+    trainer = prepare_trainer(trainer)
+#    trainer = prepare_trainer_custom(trainer)
+    
+    print("process_index:", trainer.args.process_index,
+      "world_size:", trainer.args.world_size,
+      "should_save:", trainer.args.should_save,
+      "output_dir:", trainer.args.output_dir)
+    print("save_strategy:", trainer.args.save_strategy, "save_steps:", trainer.args.save_steps)
 
-    trainer = prepare_trainer_custom(trainer)
+    print("save_strategy:", trainer.args.save_strategy,
+      "save_steps:", trainer.args.save_steps,
+      "eval_steps:", trainer.args.eval_steps,
+      "max_steps:", trainer.args.max_steps)
+    print("global_step:", trainer.state.global_step)
+
 
     ###############################################################
     # 9. BEGIN TRAINING

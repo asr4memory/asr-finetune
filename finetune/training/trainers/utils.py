@@ -3,8 +3,6 @@ from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 from transformers import TrainerCallback
 import torch
 from transformers import TrainingArguments, TrainerState, TrainerControl
-import json
-
 
 # ------------------------------------------------------------------------------
 # Callback to Save Only Adapter Weights (e.g. for PEFT/LoRA)
@@ -14,7 +12,7 @@ class SavePeftModelCallback(TrainerCallback):
     HuggingFace Trainer callback to save only the adapter model (e.g. LoRA weights)
     and remove the base model weights from checkpoints to save disk space.
     """
-
+    
     def on_save(
             self,
             args: TrainingArguments,
@@ -32,7 +30,6 @@ class SavePeftModelCallback(TrainerCallback):
             os.remove(pytorch_model_path)
         return control
 
-
 # ------------------------------------------------------------------------------
 # Callback to Synchronize Trainer State from Previous Checkpoint
 # ------------------------------------------------------------------------------
@@ -42,7 +39,7 @@ class StepSyncCallback(TrainerCallback):
     Callback to synchronize the training step counter (`state.global_step`)
     with a previously saved checkpoint, for seamless resumption.
     """
-
+    
     def __init__(self, starting_step):
         self.starting_step = starting_step
         self.has_synced = False
@@ -53,7 +50,6 @@ class StepSyncCallback(TrainerCallback):
             # Update the trainer's step counter
             state.global_step = self.starting_step
             self.has_synced = True
-
 
 # ------------------------------------------------------------------------------
 # Checkpoint Loader Utility
@@ -71,6 +67,7 @@ def load_checkpoints(checkpoint_dir):
         starting_step (int): The global step at which to resume training
         resume_from_checkpoint (str): Path to checkpoint folder, or None
     """
+    import json
     resume_from_checkpoint = None
     starting_step = 0
     try:
@@ -90,6 +87,7 @@ def load_checkpoints(checkpoint_dir):
 
     except Exception as e:
         print(f"Error synchronizing iterator state: {e}")
+
 
 
 # ------------------------------------------------------------------------------
@@ -112,3 +110,26 @@ def data_collator_id(batch):
         k: v.to(f"cuda:{local_rank}") if torch.is_tensor(v) else v
         for k, v in batch.items()
     }
+
+import re
+def normalize(text):
+    """
+    Removes certain characters from text and lowers cases.
+
+    Args:
+        text (str or list of str): Single string or list of strings to be normalized.
+
+    Returns:
+        str or list of str: Normalized string or list of normalized strings.
+    """
+    def process_single_text(single_text):
+        result = single_text.strip().lower()
+        result = re.sub(r"[!\?\.,;]", "", result)
+        return result
+
+    if isinstance(text, list):
+        return [process_single_text(t) for t in text]
+    elif isinstance(text, str):
+        return process_single_text(text)
+    else:
+        raise TypeError("Input must be a string or a list of strings.")

@@ -63,10 +63,10 @@ def get_whisper_models_local(model_type,target_language,return_timestamps=False,
     Returns:
         Tuple: (model, feature_extractor, tokenizer, processor)
     """
-    feature_extractor = WhisperFeatureExtractor.from_pretrained(model_type,load_in_8bit=load_in_8bit, device_map="auto")
+    feature_extractor = WhisperFeatureExtractor.from_pretrained(model_type,load_in_8bit=load_in_8bit)
     tokenizer = WhisperTokenizer.from_pretrained(model_type, language=target_language, task="transcribe")
     processor = WhisperProcessor.from_pretrained(model_type, language=target_language, task="transcribe")
-    model = WhisperForConditionalGeneration.from_pretrained(model_type, load_in_8bit=load_in_8bit, device_map="auto")
+    model = WhisperForConditionalGeneration.from_pretrained(model_type, load_in_8bit=load_in_8bit)
     
     # Set generation configuration
     model.generation_config.language = target_language
