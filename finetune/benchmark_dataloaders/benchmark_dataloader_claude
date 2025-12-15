@@ -1,0 +1,496 @@
+import os
+import json
+import time
+import argparse
+import matplotlib.pyplot as plt
+import pandas as pd
+import seaborn as sns
+import socket
+import psutil
+import ray
+import numpy as np
+from functools import partial
+from ray import tune
+from ray.train.torch import TorchTrainer
+from ray.train import ScalingConfig, RunConfig
+from ray.train.torch import TorchConfig
+from ray.tune import Tuner
+from models import get_whisper_models as get_models
+import logging
+from utils import create_ray_indexloader
+from typing import List, Dict, Iterator, Tuple, Optional, Any, Union
+import torch
+
+# Import our fixed HDF5 datasource
+from fixed_hdf5_datasource import read_whisper_hdf5
+
+from ray.data.context import DataContext
+DataContext.get_current().enable_tensor_extension_casting = False
+
+logger = logging.getLogger(__name__)
+
+os.environ["RAY_AIR_NEW_OUTPUT"] = "0"
+os.environ["RAY_VERBOSITY"] = "0"
+os.environ["TUNE_DISABLE_STRICT_METRIC_CHECKING"] = "1"
+ray.data.context.DataContext.get_current().enable_operator_progress_bars = False
+ray.data.context.DataContext.get_current().enable_progress_bars = False
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--path_to_data", type=str, default=None)
+    parser.add_argument("--dataset_name", type=str, required=True)
+    parser.add_argument("--output_dir", type=str, default="./benchmark_results")
+    parser.add_argument("--model_type", type=str, default="openai/whisper-large-v3")
+    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--cpu_list", nargs='+', type=int, default=[4, 8])
+    parser.add_argument("--prefetch_list", nargs='+', type=int, default=[0, 1, 4, 8])
+    parser.add_argument("--parallelism_list", nargs='+', type=int, default=[1, 2, 4, 8])
+    parser.add_argument("--local", action="store_true")
+    parser.add_argument("--preprocess", action="store_true", help="Apply feature extraction and tokenization")
+    parser.add_argument("--gpus_per_trial", type=float, default=0, help="GPUs per trial (0 for CPU-only)")
+    parser.add_argument("--output_tag", type=str, default="dataloader_benchmark")
+    parser.add_argument("--storage_path", type=str, default="./ray_results")
+    parser.add_argument("--random_seed", type=int, default=1337)
+    parser.add_argument("--run_on_local_machine", action="store_true")
+    parser.add_argument("--target_language", type=str, default="de")
+    parser.add_argument("--torch_backend", type=str, default="gloo",
+                        help="PyTorch distributed backend: 'gloo' for CPU, 'nccl' for GPU")
+    return parser.parse_args()
+
+class WhisperTorchDataCollator:
+    def __call__(self, batch: Dict[str, List[Any]]) -> Dict[str, torch.Tensor]:
+        """
+        Collate a batch from Ray Data's iter_torch_batches format.
+
+        Args:
+            batch: Dict with 'input_features' and 'labels', each containing a list/array
+
+        Returns:
+            Dict with PyTorch tensors
+        """
+        return {
+            "input_features": torch.tensor(batch["input_features"], dtype=torch.float32),
+            "labels": torch.tensor(batch["labels"], dtype=torch.long)
+        }
+
+
+def monitor_memory():
+    process = psutil.Process(os.getpid())
+    return process.memory_info().rss / (1024 ** 2)  # MB
+
+
+def run_trial(config):
+    """Benchmark trial function that processes batches and measures performance."""
+    # Disable tensor extension casting to avoid errors
+    from ray.data.context import DataContext
+    ctx = DataContext.get_current()
+    ctx.enable_tensor_extension_casting = False
+
+    # Get dataset shard from Ray Train
+    train_ds = ray.train.get_dataset_shard("train")
+
+    # Create iterable dataset with specified prefetch
+    train_ds_iterable = train_ds.iter_torch_batches(
+        prefetch_batches=config["prefetch_batches"],
+        batch_size=config["batch_size"],
+        collate_fn=WhisperTorchDataCollator(),
+    )
+
+    # Record start time and memory
+    start = time.time()
+    mem_start = monitor_memory()
+    batch_count = 0
+    total_samples = 0
+    batch_times = []
+
+    # Process the required number of batches
+    max_batches = 50  # Limit to prevent infinite loops
+    for batch in train_ds_iterable:
+        batch_start = time.time()
+
+        # Get the actual batch size (may be smaller for the last batch)
+        if "input_features" in batch:
+            # Preprocessed data
+            curr_batch_size = len(batch["input_features"])
+        elif "audio" in batch:
+            # Raw data
+            curr_batch_size = len(batch["audio"])
+        else:
+            # Fallback
+            curr_batch_size = config["batch_size"]
+
+        # Simulate some computation (like forward pass)
+        time.sleep(0.01)  # Small delay to simulate computation
+
+        batch_end = time.time()
+        batch_times.append(batch_end - batch_start)
+
+        total_samples += curr_batch_size
+        batch_count += 1
+
+        if batch_count >= max_batches:
+            break
+
+    # Calculate metrics
+    duration = time.time() - start
+    mem_end = monitor_memory()
+
+    # Only count actual processing time (not setup)
+    processing_time = sum(batch_times)
+
+    samples_per_sec = total_samples / duration
+    samples_per_sec_processing = total_samples / processing_time if processing_time > 0 else 0
+    avg_batch_time = sum(batch_times) / len(batch_times) if batch_times else 0
+    peak_mem = max(mem_start, mem_end)
+
+    # Create detailed metrics
+    metrics = {
+        "samples_per_sec": round(samples_per_sec, 2),
+        "samples_per_sec_processing": round(samples_per_sec_processing, 2),
+        "avg_batch_time_sec": round(avg_batch_time, 4),
+        "total_duration_sec": round(duration, 2),
+        "peak_memory_MB": round(peak_mem, 2),
+        "batches_processed": batch_count,
+        "total_samples": total_samples,
+        "node": socket.gethostname(),
+        "cpu_count": config["num_cpus"],
+        "prefetch_count": config["prefetch_batches"],
+        "parallelism": config["parallelism"],
+        "threads": config["threads"]
+    }
+
+    # Report metrics to Ray Tune
+    ray.train.report(metrics)
+
+    return metrics
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    logging.basicConfig(format="%(asctime)-5.5s %(name)-20.20s %(levelname)-7.7s %(message)s",
+                        datefmt="%H:%M",
+                        level=logging.INFO)
+
+    logger.info("Starting dataloader benchmarking with fixed HDF5 loader")
+
+    # Initialize Ray
+    if args.run_on_local_machine:
+        args.storage_path = os.path.join(os.getcwd(), "output")
+        ray.init(local_mode=True)
+    else:
+        ray.init("auto")
+
+    logger.info("Ray Nodes info: %s", ray.nodes())
+    logger.info("Ray Cluster Resources: %s", ray.cluster_resources())
+
+    # Disable tensor extension casting globally to avoid errors
+    ray.data.context.DataContext.get_current().enable_tensor_extension_casting = False
+
+    # Determine if GPUs are available and set appropriate backend
+    use_gpu = args.gpus_per_trial > 0
+    torch_backend = args.torch_backend
+
+    if use_gpu:
+        try:
+            import torch
+            gpu_count = torch.cuda.device_count()
+            if gpu_count == 0:
+                logger.warning("No GPUs found but --gpus_per_trial > 0. Falling back to CPU-only mode.")
+                use_gpu = False
+                torch_backend = "gloo"
+                args.gpus_per_trial = 0
+            else:
+                logger.info(f"Found {gpu_count} GPUs")
+                if torch_backend != "nccl":
+                    logger.warning(f"Using GPUs but torch_backend was '{torch_backend}', setting to 'nccl'")
+                    torch_backend = "nccl"
+        except:
+            logger.warning("Could not detect GPUs. Falling back to CPU-only mode.")
+            use_gpu = False
+            torch_backend = "gloo"
+            args.gpus_per_trial = 0
+    else:
+        logger.info("Running in CPU-only mode")
+        if torch_backend != "gloo":
+            logger.warning(f"In CPU-only mode but torch_backend was '{torch_backend}', setting to 'gloo'")
+            torch_backend = "gloo"
+
+    logger.info(f"Using PyTorch backend: {torch_backend}")
+
+    # Load models
+    if args.run_on_local_machine:
+        from models import get_whisper_models_local
+        model, feature_extractor, tokenizer, processor = get_whisper_models_local(
+            args.model_type,
+            args.target_language,
+            return_timestamps=False,
+            load_in_8bit=False
+        )
+    else:
+        model, feature_extractor, tokenizer, processor = get_models(
+            args.model_type,
+            args.target_language,
+            return_timestamps=False,
+            load_in_8bit=False
+        )
+
+    # Set up paths
+    path_to_data = os.path.join("/scratch/usr/", os.getenv('USER') + "/data") if args.path_to_data is None else args.path_to_data
+
+    # Get HDF5 paths
+    dataset_name = args.dataset_name
+    if "_train" not in dataset_name and "_val" not in dataset_name:
+        train_h5_path = os.path.join(path_to_data, f"{dataset_name}_train.h5")
+        val_h5_path = os.path.join(path_to_data, f"{dataset_name}_val.h5")
+    else:
+        # For cases where the full dataset name is specified
+        train_h5_path = os.path.join(path_to_data, f"{dataset_name}.h5")
+        val_h5_path = os.path.join(path_to_data, f"{dataset_name.replace('_train', '_val')}.h5")
+
+    # Handle path for subdirectories
+    if not os.path.exists(train_h5_path) and "sharded" in args.dataset_name:
+        train_h5_path = os.path.join(path_to_data, args.dataset_name, f"{os.path.basename(args.dataset_name)}_train.h5")
+        val_h5_path = os.path.join(path_to_data, args.dataset_name, f"{os.path.basename(args.dataset_name)}_val.h5")
+
+    logger.info(f"Using train path: {train_h5_path}")
+    logger.info(f"Using val path: {val_h5_path}")
+
+    # Create output directory
+    os.makedirs(args.output_dir, exist_ok=True)
+    results_path = os.path.join(args.output_dir, "benchmark_results.json")
+
+    # Store all results here
+    all_results = []
+
+    # Run benchmarks for different configurations
+    for cpu in args.cpu_list:
+        for prefetch in args.prefetch_list:
+            for parallelism in [0]:
+                # Use half the CPUs for threads to avoid oversubscription
+                thread_count = max(1, cpu // 2)
+
+                logging.info(f"Running benchmark with {cpu} CPUs, {thread_count} threads, prefetch={prefetch}, parallelism={parallelism}")
+
+                try:
+                    # Create Ray Datasets using our fixed loader
+                    train_ds = read_whisper_hdf5(
+                        hdf5_path=train_h5_path,
+                        batch_size=args.batch_size,
+                        limit=100,
+                        parallelism=cpu,
+                        preprocess=args.preprocess,
+                        feature_extractor=feature_extractor if args.preprocess else None,
+                        tokenizer=tokenizer if args.preprocess else None,
+                        target_language=args.target_language,
+                        debug=True,
+                    )
+
+                    val_ds = read_whisper_hdf5(
+                        hdf5_path=val_h5_path,
+                        batch_size=args.batch_size,
+                        limit=100,
+                        parallelism=cpu,
+                        preprocess=args.preprocess,
+                        feature_extractor=feature_extractor if args.preprocess else None,
+                        tokenizer=tokenizer if args.preprocess else None,
+                        target_language=args.target_language,
+                        debug=False,
+                    )
+
+                    # Log dataset information
+                    logger.info(f"Train dataset count: {train_ds.count()}")
+
+                    # Set up Ray datasets for trainer
+                    ray_datasets = {
+                        "train": train_ds,
+                        "validation": val_ds,
+                    }
+
+                    # Configure resources
+                    resources_per_trial = {"CPU": cpu}
+                    if use_gpu:
+                        resources_per_trial["GPU"] = args.gpus_per_trial
+
+                    # Setup trainer with the appropriate backend
+                    trainer = TorchTrainer(
+                        run_trial,
+                        scaling_config=ScalingConfig(
+                            num_workers=1,
+                            use_gpu=use_gpu,
+                            resources_per_worker=resources_per_trial,
+                        ),
+                        datasets={
+                            "train": ray_datasets["train"],
+                            "eval": ray_datasets["validation"],
+                        },
+                        torch_config=TorchConfig(
+                            backend=torch_backend
+                        )
+                    )
+
+                    # Setup parameter space for tuning
+                    param_space = {
+                        "batch_size": args.batch_size,
+                        "prefetch_batches": prefetch,
+                        "num_cpus": cpu,
+                        "parallelism": parallelism,
+                        "threads": thread_count
+                    }
+
+                    # Create tuner
+                    tuner = Tuner(
+                        trainer,
+                        param_space={"train_loop_config": param_space},
+                        tune_config=tune.TuneConfig(
+                            max_concurrent_trials=4,
+                            num_samples=4,  # Run 3 trials for each configuration
+                            metric="samples_per_sec",
+                            mode="max",
+                        ),
+                        run_config=RunConfig(
+                            name=f"{args.output_tag}_cpu{cpu}_prefetch{prefetch}_parallel{parallelism}",
+                            storage_path=args.storage_path,
+                        ),
+                    )
+
+                    # Run trials
+                    tune_results = tuner.fit()
+
+                    # Get the results dataframe
+                    results_df = tune_results.get_dataframe()
+
+                    # Calculate statistics
+                    stats = {
+                        "cpu_count": cpu,
+                        "thread_count": thread_count,
+                        "prefetch_count": prefetch,
+                        "parallelism": parallelism,
+                        "samples_per_sec_mean": results_df["samples_per_sec"].mean(),
+                        "samples_per_sec_std": results_df["samples_per_sec"].std(),
+                        "samples_per_sec_min": results_df["samples_per_sec"].min(),
+                        "samples_per_sec_max": results_df["samples_per_sec"].max(),
+                        "peak_memory_MB_mean": results_df["peak_memory_MB"].mean(),
+                        "node": socket.gethostname(),
+                        "preprocess": args.preprocess,
+                        "backend": torch_backend,
+                        "use_gpu": use_gpu
+                    }
+
+                    all_results.append(stats)
+                    logging.info(f"Results for CPU={cpu}, threads={thread_count}, prefetch={prefetch}, parallelism={parallelism}:")
+                    logging.info(f"  Samples/sec: {stats['samples_per_sec_mean']:.2f} ± {stats['samples_per_sec_std']:.2f}")
+                    logging.info(f"  Memory usage: {stats['peak_memory_MB_mean']:.2f} MB")
+
+                except Exception as e:
+                    logging.error(f"Error during benchmark for CPU={cpu}, prefetch={prefetch}, parallelism={parallelism}: {e}")
+                    import traceback
+                    traceback.print_exc()
+
+                    # Add failed result with None values
+                    failed_stats = {
+                        "cpu_count": cpu,
+                        "thread_count": thread_count,
+                        "prefetch_count": prefetch,
+                        "parallelism": parallelism,
+                        "samples_per_sec_mean": None,
+                        "error": str(e),
+                        "node": socket.gethostname(),
+                        "preprocess": args.preprocess,
+                        "backend": torch_backend,
+                        "use_gpu": use_gpu
+                    }
+                    all_results.append(failed_stats)
+
+    # Save all results
+    with open(results_path, "w") as f:
+        json.dump(all_results, f, indent=2)
+
+    # Convert results to DataFrame for visualization (filter out failed runs)
+    df = pd.DataFrame([r for r in all_results if "samples_per_sec_mean" in r and r["samples_per_sec_mean"] is not None])
+
+    if len(df) == 0:
+        logging.error("No successful benchmark runs to visualize.")
+    else:
+        # Create visualizations
+
+        # 1. Plot throughput by CPU count
+        plt.figure(figsize=(14, 8))
+        sns.lineplot(
+            data=df,
+            x="cpu_count",
+            y="samples_per_sec_mean",
+            hue="parallelism",
+            style="prefetch_count",
+            markers=True,
+            dashes=False,
+            err_style="band"
+        )
+        plt.title("Throughput by CPU Count and Parallelism")
+        plt.xlabel("Number of CPUs")
+        plt.ylabel("Samples per Second (mean)")
+        plt.grid(True, linestyle='--', alpha=0.7)
+        plt.tight_layout()
+        plt.savefig(os.path.join(args.output_dir, "throughput_by_cpu.png"))
+
+        # 2. Plot throughput by parallelism
+        plt.figure(figsize=(14, 8))
+        sns.lineplot(
+            data=df,
+            x="parallelism",
+            y="samples_per_sec_mean",
+            hue="cpu_count",
+            style="prefetch_count",
+            markers=True,
+            dashes=False,
+            err_style="band"
+        )
+        plt.title("Throughput by Parallelism and CPU Count")
+        plt.xlabel("Parallelism")
+        plt.ylabel("Samples per Second (mean)")
+        plt.grid(True, linestyle='--', alpha=0.7)
+        plt.tight_layout()
+        plt.savefig(os.path.join(args.output_dir, "throughput_by_parallelism.png"))
+
+        # 3. Heatmap of throughput (CPU vs Parallelism)
+        if len(df["cpu_count"].unique()) > 1 and len(df["parallelism"].unique()) > 1:
+            plt.figure(figsize=(12, 10))
+            # Average across prefetch counts
+            heatmap_data = df.groupby(["cpu_count", "parallelism"])["samples_per_sec_mean"].mean().reset_index()
+            heatmap_pivot = heatmap_data.pivot(
+                index="cpu_count",
+                columns="parallelism",
+                values="samples_per_sec_mean"
+            )
+            sns.heatmap(heatmap_pivot, annot=True, fmt=".1f", cmap="YlGnBu")
+            plt.title("Average Samples per Second by CPU and Parallelism")
+            plt.ylabel("Number of CPUs")
+            plt.xlabel("Parallelism")
+            plt.tight_layout()
+            plt.savefig(os.path.join(args.output_dir, "throughput_heatmap.png"))
+
+        # 4. Bar plot of peak memory
+        plt.figure(figsize=(14, 8))
+        sns.barplot(
+            data=df,
+            x="cpu_count",
+            y="peak_memory_MB_mean",
+            hue="parallelism"
+        )
+        plt.title("Peak Memory Usage by CPU Count and Parallelism")
+        plt.xlabel("Number of CPUs")
+        plt.ylabel("Peak Memory (MB)")
+        plt.grid(axis='y', linestyle='--', alpha=0.7)
+        plt.tight_layout()
+        plt.savefig(os.path.join(args.output_dir, "memory_usage.png"))
+
+        # Find optimal configuration
+        best_config = df.loc[df['samples_per_sec_mean'].idxmax()]
+
+        logging.info(f"Benchmark complete. Results saved to {results_path}")
+        logging.info(f"Best configuration:")
+        logging.info(f"  CPUs: {best_config['cpu_count']}")
+        logging.info(f"  Threads: {best_config['thread_count']}")
+        logging.info(f"  Prefetch: {best_config['prefetch_count']}")
+        logging.info(f"  Parallelism: {best_config['parallelism']}")
+        logging.info(f"  Throughput: {best_config['samples_per_sec_mean']:.2f} samples/sec")
+        logging.info(f"  Memory: {best_config['peak_memory_MB_mean']:.2f} MB")

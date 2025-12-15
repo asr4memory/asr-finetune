@@ -1,0 +1,32 @@
+Failure # 1 (occurred at 2025-07-24_13-40-48)
+[36mray::_Inner.train()[39m (pid=19544, ip=127.0.0.1, actor_id=f6b7f06bada155abff3dd28b01000000, repr=TorchTrainer)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Caskroom/miniconda/base/envs/FU/lib/python3.12/site-packages/ray/tune/trainable/trainable.py", line 330, in train
+    raise skipped from exception_cause(skipped)
+  File "/opt/homebrew/Caskroom/miniconda/base/envs/FU/lib/python3.12/site-packages/ray/train/_internal/utils.py", line 57, in check_for_failure
+    ray.get(object_ref)
+           ^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ray.exceptions.RayTaskError(ImportError): [36mray::_RayTrainWorker__execute.get_next()[39m (pid=19548, ip=127.0.0.1, actor_id=1d9c4bc5c236ff0f8987e4f901000000, repr=<ray.train._internal.worker_group.RayTrainWorker object at 0x12678c470>)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Caskroom/miniconda/base/envs/FU/lib/python3.12/site-packages/ray/train/_internal/worker_group.py", line 33, in __execute
+    raise skipped from exception_cause(skipped)
+  File "/opt/homebrew/Caskroom/miniconda/base/envs/FU/lib/python3.12/site-packages/ray/train/_internal/utils.py", line 176, in discard_return_wrapper
+    train_func(*args, **kwargs)
+  File "/Users/chrvt/Documents/GitHub/asr-finetune/finetune/minimal_version/trainers/trainers.py", line 475, in train_whisper_peft_model
+    model, feature_extractor, tokenizer, processor = get_whisper_models(training_kwargs["model_type"],
+                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/chrvt/Documents/GitHub/asr-finetune/finetune/minimal_version/models/whisper_models.py", line 102, in get_whisper_models
+    model, feature_extractor, tokenizer, processor = get_whisper_models_local(model_type,
+                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/chrvt/Documents/GitHub/asr-finetune/finetune/minimal_version/models/whisper_models.py", line 69, in get_whisper_models_local
+    model = WhisperForConditionalGeneration.from_pretrained(model_type, load_in_8bit=load_in_8bit)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Caskroom/miniconda/base/envs/FU/lib/python3.12/site-packages/transformers/modeling_utils.py", line 3452, in from_pretrained
+    hf_quantizer.validate_environment(
+  File "/opt/homebrew/Caskroom/miniconda/base/envs/FU/lib/python3.12/site-packages/transformers/quantizers/quantizer_bnb_8bit.py", line 73, in validate_environment
+    raise ImportError(
+ImportError: Using `bitsandbytes` 8-bit quantization requires the latest version of bitsandbytes: `pip install -U bitsandbytes`

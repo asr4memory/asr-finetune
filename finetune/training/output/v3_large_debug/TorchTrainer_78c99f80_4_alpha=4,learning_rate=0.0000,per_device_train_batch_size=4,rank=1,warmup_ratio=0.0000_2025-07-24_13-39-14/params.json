@@ -1,0 +1,9 @@
+{
+  "train_loop_config": {
+    "alpha": 4,
+    "learning_rate": 9.790264112863506e-06,
+    "per_device_train_batch_size": 4,
+    "rank": 1,
+    "warmup_ratio": 0.0
+  }
+}
