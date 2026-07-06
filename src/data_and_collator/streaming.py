@@ -1,0 +1,296 @@
+""" Collection of utility functions/classes for pre-processing data, saving and more.
+
+Functions are:
+   save_file
+   load_and_prepare_data_from_folders
+   normalize
+   steps_per_epoch
+
+Classes are:
+    DataCollatorSpeechSeq2SeqWithPadding
+"""
+import json
+import logging
+import re
+
+import h5py
+import ray
+
+import psutil
+
+import multiprocessing
+import time
+import numpy as np
+import os
+import shutil
+logger = logging.getLogger(__name__)
+
+def load_and_prepare_data_from_folders(a):
+    return a
+
+def save_file(file,output_dir,mode='config',file_tag = ''):
+    """Saves {config,eval_results} files.
+
+    Args:
+        file (txt,json): A text or json file to be saved.
+        output_dir (str): Path to output directory where file will be stored
+        mode (str): If `config`: saves config file. If `eval_results`: saves the output eval results as json.
+    """
+    if mode == 'config':
+        config_path = os.path.join(output_dir, file_tag + 'config.txt')
+        with open(config_path, 'a') as f:
+            print(file, file=f)
+
+    elif mode == 'json':
+        eval_path = os.path.join(output_dir, file_tag + '.json')
+        with open(eval_path, 'w') as f:
+            json.dump(file, f)
+
+def log_memory_usage(label=""):
+    mem = psutil.virtual_memory()
+    logging.info(
+        f"MEMORY [{label}]: {mem.percent}% - Used: {mem.used / 1e9:.2f} GB, Available: {mem.available / 1e9:.2f} GB")
+
+def normalize(text):
+    """
+    Removes certain characters from text and lowers cases.
+
+    Args:
+        text (str or list of str): Single string or list of strings to be normalized.
+
+    Returns:
+        str or list of str: Normalized string or list of normalized strings.
+    """
+    def process_single_text(single_text):
+        result = single_text.strip().lower()
+        result = re.sub(r"[!\?\.,;]", "", result)
+        return result
+
+    if isinstance(text, list):
+        return [process_single_text(t) for t in text]
+    elif isinstance(text, str):
+        return process_single_text(text)
+    else:
+        raise TypeError("Input must be a string or a list of strings.")
+
+
+def steps_per_epoch(len_train_set,batch_size):
+    """Calculates the total number of gradient steps
+
+    Assume gradient_accumulation_steps = 1.
+
+    TODO:
+        * Add gradient_accumulation_steps > 1
+        * adjust train.py to allow for gradient accumulations
+
+    Args:
+        len_train_set (int): Total dataset length
+        batch_size (int): batch size
+    """
+    if len_train_set % batch_size == 0:
+        return int(len_train_set / batch_size)
+    else:
+       return int(len_train_set / batch_size) + 1
+
+# Define a custom argument type for a list of strings
+def list_of_strings(arg):
+    return arg.split(',')
+
+
+def create_ray_indexloader(file_path: str):
+    """
+    Create Ray dataset for a single HDF5 file.
+
+    Args:
+        file_path: Path to the HDF5 file
+
+    Returns:
+        Ray dataset
+    """
+    # Get number of samples in the file
+    with h5py.File(file_path, 'r') as f:
+        try:
+            num_samples = len(f['audio'])
+        except:
+            num_samples = len(f['audio_waveforms'])
+
+#    num_samples = 30
+    # Create items with indices
+    items = [{"idx": idx} for idx in range(num_samples)]
+
+    # Create dataset
+    dataset = ray.data.from_items(items)
+
+    return dataset
+
+
+_shared_hdf5 = None
+
+def _init_worker(hdf5_path):
+    global _shared_hdf5
+
+    import h5py
+
+    _shared_hdf5 = h5py.File(hdf5_path, "r")
+
+
+def _process_index_shared(idx):
+    global _shared_hdf5
+
+    try:
+        audio = np.array(_shared_hdf5['audio'][idx], dtype=np.float32).copy()
+        transcription = _shared_hdf5['transcription'][idx]
+
+        if isinstance(transcription, bytes):
+            transcription = transcription.decode('utf-8')
+
+        return idx, audio, transcription
+
+    except Exception as e:
+        print(f"[ERROR] Index {idx}: {e}")
+        return idx, None, None
+
+
+class SimpleStreamingCollator:
+    def __init__(self, hdf5_path, feature_extractor, tokenizer, num_workers=None, copy_to_local=False):
+        self.hdf5_path = self._copy_to_local(hdf5_path) if copy_to_local else hdf5_path
+        self.feature_extractor = feature_extractor
+        self.tokenizer = tokenizer
+
+        # Allow explicit num_workers=0 for single-process mode
+        if num_workers == 0:
+            self.num_workers = 0
+        else:
+            self.num_workers = min(num_workers or 4, multiprocessing.cpu_count() - 1, 8)
+
+        self.pool = None
+        self.h5file = None  # For single-process mode
+
+        # Performance tracking
+        self.batch_times = []
+        self.batch_count = 0
+
+    def __call__(self, batch_dict):
+        start = time.time()
+        indices = batch_dict['idx']
+
+        if self.num_workers == 0:
+            # Single-process mode
+            if self.h5file is None:
+                import h5py
+                self.h5file = h5py.File(self.hdf5_path, "r")
+
+            # Process indices sequentially
+            results = []
+            for idx in indices:
+                try:
+                    audio = np.array(self.h5file['audio'][idx], dtype=np.float32).copy()
+                    transcription = self.h5file['transcription'][idx]
+
+                    if isinstance(transcription, bytes):
+                        transcription = transcription.decode('utf-8')
+
+                    results.append((idx, audio, transcription))
+                except Exception as e:
+                    print(f"[ERROR] Index {idx}: {e}")
+        else:
+            # Multi-process mode
+            if self.pool is None:
+                self.pool = multiprocessing.Pool(
+                    processes=self.num_workers,
+                    initializer=_init_worker,
+                    initargs=(self.hdf5_path,)
+                )
+
+            # Parallel data loading
+            results = self.pool.map(_process_index_shared, indices)
+
+        valid_results = [(idx, audio, trans) for idx, audio, trans in results if audio is not None]
+
+        if not valid_results:
+            raise RuntimeError(f"No valid data in batch: {indices}")
+
+        _, audio_list, transcription_list = zip(*valid_results)
+
+        # Feature extraction
+        mel_features_list = []
+        for audio in audio_list:
+            features = self.feature_extractor(audio, sampling_rate=16000)
+            mel_features_list.append({"input_features": features.input_features[0]})
+
+        # Performance logging
+        elapsed = time.time() - start
+        self.batch_times.append(elapsed)
+        self.batch_count += 1
+
+        if self.batch_count % 5 == 0:
+            avg_time = sum(self.batch_times[-5:]) / 5
+            print(f"[Collator] Batch {self.batch_count}: {avg_time:.2f}s, {len(indices) / avg_time:.2f} samples/sec")
+
+        return self._prepare_dataset(mel_features_list, transcription_list)
+
+    def _copy_to_local(self, path: str) -> str:
+        """Copy HDF5 file to local storage for better performance."""
+        fname = os.path.basename(path)
+        local_dir = "/tmp"
+        local_path = os.path.join(local_dir, fname)
+        if not os.path.exists(local_path):
+            try:
+                print(f"[INFO] Copying {path} to {local_path} (node-local)...")
+                start_time = time.time()
+                shutil.copy2(path, local_path)
+                elapsed = time.time() - start_time
+                print(f"[INFO] Copy completed in {elapsed:.2f}s")
+            except Exception as e:
+                print(f"[WARNING] Failed to copy to local disk: {e}")
+                return path
+        return local_path
+
+    def _prepare_dataset(self, mel_features_list, transcriptions):
+        padded_features = self.feature_extractor.pad(
+            mel_features_list,
+            padding="longest",
+            return_tensors="pt"
+        )
+
+        input_features = padded_features.input_features
+
+        tokenized_labels = [
+            self.tokenizer(text if isinstance(text, str) else str(text)).input_ids
+            for text in transcriptions
+        ]
+
+        label_features = [{"input_ids": ids} for ids in tokenized_labels]
+        labels_batch = self.tokenizer.pad(label_features,
+                                          padding="max_length",
+                                          max_length=448,
+                                          return_tensors="pt")
+
+        labels = labels_batch["input_ids"].masked_fill(
+            labels_batch.attention_mask.ne(1), -100
+        )
+
+        return {"input_features": input_features, "labels": labels}
+
+
+    def cleanup(self):
+        """Explicitly clean up resources - call this before exiting."""
+        if hasattr(self, 'pool') and self.pool is not None:
+            self.pool.close()
+            self.pool.join()
+            self.pool = None
+
+    def __del__(self):
+        # Still have a __del__ as a fallback, but make it safe
+        try:
+            self.cleanup()
+        except Exception:
+            pass
+            
+#    def __del__(self):
+#        if hasattr(self, 'pool') and self.pool is not None:
+#            self.pool.close()
+#            self.pool.join()
+#
+#        if hasattr(self, 'h5file') and self.h5file is not None:
+#            self.h5file.close()
