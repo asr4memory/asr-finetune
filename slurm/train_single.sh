@@ -25,12 +25,12 @@ export DATA_PATH=<DATA_PATH>
 SCRATCH=<SCRATCH>
 
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
-export VALIDATION_SUMMARY_CSV="$PWD/src/trainers/data/validation_summary_ws_frac0.05.csv"
+export VALIDATION_SUMMARY_CSV="$PWD/src/finetuning/trainers/data/validation_summary_ws_frac0.05.csv"
 export PYTHONPATH="$PWD/src:${PYTHONPATH:-}"
 export PYTHONUNBUFFERED=1 TOKENIZERS_PARALLELISM=false
 mkdir -p "$SCRATCH/ray_results"
 
-python -u -m train_single_peft \
+python -u -m finetuning.train_single_peft \
     -c configs/train/small_hailmary_phase1.config \
     --storage_path "$SCRATCH/ray_results" \
     --auto_resume_from_output_dir

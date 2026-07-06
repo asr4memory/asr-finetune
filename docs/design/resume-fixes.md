@@ -1,9 +1,9 @@
 # Resume Fix — Ray Tune trial errors on every SLURM resume
 
-> All file paths below are relative to the source root `src/` (e.g.
-> `trainers/utils.py` = `src/trainers/utils.py`). These fixes are already applied
-> in the code; this document records *why* they exist so future changes don't
-> regress them.
+> All file paths below are relative to the finetuning package `src/finetuning/`
+> (e.g. `trainers/utils.py` = `src/finetuning/trainers/utils.py`). These fixes are
+> already applied in the code; this document records *why* they exist so future
+> changes don't regress them.
 
 ## Symptom
 

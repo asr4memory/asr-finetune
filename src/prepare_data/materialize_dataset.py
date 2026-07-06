@@ -80,7 +80,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import torch
 
-from models.whisper_models import get_whisper_models_from_dir
+from finetuning.models.whisper_models import get_whisper_models_from_dir
 
 import math
 
@@ -201,9 +201,10 @@ class SimpleStreamingCollator:
         return self._prepare_dataset(mel_features_list, transcription_list)
 
     def _copy_to_local(self, path: str) -> str:
-        """Copy HDF5 file to local storage for better performance."""
+        """Copy HDF5 file to node-local storage for better performance."""
         fname = os.path.basename(path)
-        local_dir = "/tmp"
+        # Honor the cluster's node-local scratch ($TMPDIR) when set.
+        local_dir = os.environ.get("TMPDIR", "/tmp")
         local_path = os.path.join(local_dir, fname)
         if not os.path.exists(local_path):
             try:
@@ -290,8 +291,9 @@ def create_index_shards(total_samples, num_shards=10):
 def create_ray_dataset(
         hdf5_path,
         output_path,
-        model_type='openai/whisper-large-v3',
+        model_type='whisper-large-v3',
         batch_size=32,
+        num_shards=100,
         num_workers=8
 ):
     """
@@ -300,8 +302,10 @@ def create_ray_dataset(
     Args:
         hdf5_path: Path to the HDF5 file containing audio and transcription data
         output_path: Path to save the Ray dataset
-        processor_name: Name of the Whisper processor to use
+        model_type: Model sub-directory under MODEL_PATH providing the feature
+            extractor + tokenizer (e.g. whisper-large-v3)
         batch_size: Batch size for preprocessing
+        num_shards: Number of Parquet output shards to split the corpus into
         num_workers: Number of workers for parallel processing
     """
     print(f"Initializing processor components from {model_type}")
@@ -322,11 +326,7 @@ def create_ray_dataset(
 
     print(f"Processing {total_samples} samples with batch size {batch_size}")
 
-    # total_samples = 500
-
-    # Example usage
-    # total_samples = 20131
-    index_shards = create_index_shards(total_samples, num_shards=100)
+    index_shards = create_index_shards(total_samples, num_shards=num_shards)
 
     # Print out shard information
     for shard_idx, shard in enumerate(index_shards):
@@ -434,25 +434,29 @@ def get_torch_iterator(dataset, batch_size=16):
 
 
 def main():
-    import argparse
+    import configargparse
 
-    ap = argparse.ArgumentParser(
+    p = configargparse.ArgumentParser(
         description="Materialize an HDF5 corpus (audio + transcription) into sharded "
                     "Parquet files of pre-computed Whisper features (log-mel + token ids). "
-                    "Run one split at a time.",
+                    "Run one split at a time. All options can be supplied via a config "
+                    "file, e.g. -c configs/prepare/materialize.config",
     )
-    ap.add_argument("--hdf5_path", required=True,
-                    help="Input HDF5 corpus with 'audio' and 'transcription' datasets, "
-                         "e.g. $DATA_PATH/eg_dataset_complete_v3_train.h5")
-    ap.add_argument("--output_path", required=True,
-                    help="Output directory root; the --split sub-directory is created underneath.")
-    ap.add_argument("--split", default="train_parquet",
-                    help="Split sub-directory to write (train_parquet / val_parquet / test_parquet).")
-    ap.add_argument("--model_type", default="whisper-large-v3",
-                    help="Model sub-directory under MODEL_PATH whose feature extractor + "
-                         "tokenizer are used for preprocessing (e.g. whisper-large-v3).")
-    ap.add_argument("--batch_size", type=int, default=128)
-    args = ap.parse_args()
+    p.add_argument("-c", is_config_file=True, help="Config file path.")
+    p.add_argument("--hdf5_path", required=True,
+                   help="Input HDF5 corpus with 'audio' and 'transcription' datasets, "
+                        "e.g. $DATA_PATH/eg_dataset_complete_v3_train.h5")
+    p.add_argument("--output_path", required=True,
+                   help="Output directory root; the --split sub-directory is created underneath.")
+    p.add_argument("--split", default="train_parquet",
+                   help="Split sub-directory to write (train_parquet / val_parquet / test_parquet).")
+    p.add_argument("--model_type", default="whisper-large-v3",
+                   help="Model sub-directory under MODEL_PATH whose feature extractor + "
+                        "tokenizer are used for preprocessing (e.g. whisper-large-v3).")
+    p.add_argument("--batch_size", type=int, default=32, help="Preprocessing batch size.")
+    p.add_argument("--num_shards", type=int, default=100,
+                   help="Number of Parquet output shards to split the corpus into.")
+    args = p.parse_args()
 
     ray.init()
     create_ray_dataset(
@@ -460,6 +464,7 @@ def main():
         model_type=args.model_type,
         output_path=os.path.join(args.output_path, args.split),
         batch_size=args.batch_size,
+        num_shards=args.num_shards,
     )
     ray.shutdown()
 

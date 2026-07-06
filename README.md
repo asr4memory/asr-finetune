@@ -15,7 +15,7 @@ forgetting on out-of-distribution audio.
 > [here](https://media.oral-history.digital/asr4memory/ev001_comparison_vanilla_may26.mp4).
 
 ---
-
+[materialize_dataset.py](src%2Fprepare_data%2Fmaterialize_dataset.py)
 ## What this project does
 
 - **PEFT fine-tuning** — LoRA with **DoRA** (`use_dora=True`) on the attention
@@ -44,27 +44,29 @@ forgetting on out-of-distribution audio.
 ```
 asr-finetune/
 ├── README.md  LICENSE  CITATION.cff  requirements.txt  environment.yml
-├── src/                         # all Python source (put on PYTHONPATH)
-│   ├── projects_paths.py        # env-driven path resolution (MODEL_PATH, DATA_PATH, ...)
-│   ├── utils.py                 # shared helpers (normalize, steps_per_epoch, ...)
-│   ├── train_hyper.py           # ★ HPO training entry point
-│   ├── train_single_peft.py     # ★ single fixed-config run (reproduce a trial)
-│   ├── models/                  # Whisper loaders (local dir / HF hub)
-│   ├── data_and_collator/       # HDF5 / Parquet loaders, Ray streaming collators
-│   ├── prepare_data/            # materialize_dataset.py — HDF5 → Parquet features
-│   ├── trainers/                # training loops, PEFT build, EMA, WER metric, baselines/
-│   │   └── data/                #   validation_summary_*.csv (per-shard baselines)
-│   ├── searchers_and_schedulers/# Optuna/ASHA searchers, DecorrelationStopper, spaces
-│   └── evaluation/              # ★ evaluate.py, validate_model.py, compute_baseline_wer.py
-├── configs/                     # .config files (configargparse) — train/ and eval/
-├── slurm/                       # runnable SLURM job templates (+ examples/ per cluster)
-├── scripts/  (under src/)       # helper utilities (download model, migrate Optuna DB, ...)
-└── docs/                        # MONITORING.md, HPC.md, design notes
+├── src/                             # Python source (put src/ on PYTHONPATH)
+│   ├── finetuning/                  # the fine-tuning engine (compact package)
+│   │   ├── train_hyper.py           # ★ HPO training entry point
+│   │   ├── train_single_peft.py     # ★ single fixed-config run (reproduce a trial)
+│   │   ├── projects_paths.py        # env-driven path resolution (MODEL_PATH, DATA_PATH, ...)
+│   │   ├── utils.py                 # shared helpers (normalize, steps_per_epoch, ...)
+│   │   ├── models/                  # Whisper loaders (local dir / HF hub)
+│   │   ├── data_and_collator/       # HDF5 / Parquet loaders, Ray streaming collators
+│   │   ├── trainers/                # training loops, PEFT build, EMA, WER metric
+│   │   │   └── data/                #   validation_summary_*.csv (per-shard baselines)
+│   │   └── searchers_and_schedulers/# Optuna/ASHA searchers, DecorrelationStopper, spaces
+│   ├── prepare_data/                # ★ materialize_dataset.py — HDF5 → Parquet features
+│   └── evaluation/                  # ★ evaluate.py, validate_model.py, compute_baseline_wer.py
+├── configs/                         # .config files (configargparse) — train/ eval/ prepare/
+├── scripts/                         # standalone helpers (download_hf_model.py)
+├── slurm/                           # runnable SLURM job templates (+ examples/ per cluster)
+└── docs/                            # MONITORING.md, HPC.md, design notes
 ```
 
 The code is run with `src/` on the Python path (`PYTHONPATH=src`); it is **not**
-a pip-installable package. Every entry point is invoked as
-`PYTHONPATH=src python -m <module>`.
+a pip-installable package. Entry points are invoked as
+`PYTHONPATH=src python -m finetuning.<module>` (training),
+`python -m evaluation.<module>`, or `python -m prepare_data.<module>`.
 
 ---
 
@@ -89,7 +91,7 @@ environment.yml`); still reinstall a CUDA-matched torch on a GPU cluster.
 ## 2. Set paths
 
 All machine-specific locations are read from environment variables by
-`src/projects_paths.py`. On a cluster, point them at fast scratch storage:
+`src/finetuning/projects_paths.py`. On a cluster, point them at fast scratch storage:
 
 ```bash
 export MODEL_PATH=/path/to/models     # holds <model_type>/{model,processor,tokenizer,feature_extractor}
@@ -105,7 +107,7 @@ To extend to your own cluster, copy a `slurm/*.sh` template and set these there.
 ## 3. Download the base model
 
 ```bash
-python src/scripts/download_hf_model.py \
+python scripts/download_hf_model.py \
     --model_id openai/whisper-large-v3 \
     --output_dir "$MODEL_PATH/whisper-large-v3"
 
@@ -120,17 +122,17 @@ This writes the four components (`model/`, `processor/`, `feature_extractor/`,
 ## 4. Prepare the dataset
 
 Training reads **pre-computed Parquet feature shards**; the standalone evaluator
-reads the **HDF5 test set** directly. Materialize each split from its HDF5 corpus
-(audio + transcription) one at a time:
+reads the **HDF5 test set** directly. Edit `configs/prepare/materialize.config`
+(input `hdf5_path`, `output_path`, `split`, `model_type`, `num_shards`), then
+materialize each split one at a time:
 
 ```bash
-PYTHONPATH=src python -m prepare_data.materialize_dataset \
-    --hdf5_path   "$DATA_PATH/eg_dataset_complete_v3_train.h5" \
-    --output_path "$DATA_PATH/eg_dataset_complete_v3_sharded" \
-    --split       train_parquet \
-    --model_type  whisper-large-v3
-# repeat with --split val_parquet (and the *_val.h5 corpus)
+PYTHONPATH=src python -m prepare_data.materialize_dataset -c configs/prepare/materialize.config
+# then edit split -> val_parquet (and hdf5_path -> *_val.h5) and re-run
 ```
+
+Any config value can be overridden on the command line, e.g.
+`... -c configs/prepare/materialize.config --split val_parquet --hdf5_path "$DATA_PATH/..._val.h5"`.
 
 Expected data directory contract: `train_parquet/` and `val_parquet/` shards for
 training, plus `<dataset_name>_test.h5` for evaluation, all under `$DATA_PATH`.
@@ -142,19 +144,19 @@ the pretrained WER on every validation shard:
 
 ```bash
 PYTHONPATH=src python -m evaluation.compute_baseline_wer --model_type whisper-small
-# writes src/trainers/data/validation_summary_<tag>.csv
+# writes src/finetuning/trainers/data/validation_summary_<tag>.csv
 ```
 
 Point `VALIDATION_SUMMARY_CSV` at the CSV that matches your model and
 `eval_sample_fraction` (e.g. `validation_summary_ws_frac0.05.csv`). A set of
-baselines for tiny/small/medium is already committed under `src/trainers/data/`.
+baselines for tiny/small/medium is already committed under `src/finetuning/trainers/data/`.
 
 ## 6. Train
 
 **Hyper-parameter optimization (main entry point):**
 
 ```bash
-PYTHONPATH=src python -m train_hyper \
+PYTHONPATH=src python -m finetuning.train_hyper \
     -c configs/train/small_hailmary_phase1.config \
     --storage_path   "$SCRATCH/ray_results" \
     --optuna_db_path "$SCRATCH/optuna/small_wer_diff.db"
@@ -169,7 +171,7 @@ Tune experiment and the Optuna study (`resume_training=True`).
 **Single fixed-config run** (reproduce the best trial deterministically):
 
 ```bash
-PYTHONPATH=src python -m train_single_peft -c configs/train/small_hailmary_phase1.config
+PYTHONPATH=src python -m finetuning.train_single_peft -c configs/train/small_hailmary_phase1.config
 ```
 
 ## 7. Evaluate on the test set
@@ -215,7 +217,7 @@ attention `q/k/v` and output projections, bf16 mixed precision, batch size 8,
 
 The best model came from early training (~1000 steps ≈ 8 h of audio). Training
 used 4×A100 GPUs (~48 h); evaluation used a single RTX 2080 Ti (~17 h). See the
-per-model baseline CSVs in `src/trainers/data/` and the design notes in
+per-model baseline CSVs in `src/finetuning/trainers/data/` and the design notes in
 `docs/design/` for the rationale behind DoRA, the α-coupling, and the resume fixes.
 
 ## Citation

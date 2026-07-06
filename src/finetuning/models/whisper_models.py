@@ -8,7 +8,7 @@ The loading is designed to be Ray-compatible and flexible for both PEFT and full
 import os
 from pathlib import Path
 import sys
-from projects_paths import MODEL_PATH
+from finetuning.projects_paths import MODEL_PATH
 
 from transformers import WhisperFeatureExtractor
 from transformers import WhisperTokenizer

@@ -27,13 +27,13 @@ export DATA_PATH="/scratch/usr/$USER/data"
 SCRATCH="/scratch/usr/$USER"
 
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
-export VALIDATION_SUMMARY_CSV="$PWD/src/trainers/data/validation_summary.csv"
+export VALIDATION_SUMMARY_CSV="$PWD/src/finetuning/trainers/data/validation_summary.csv"
 export PYTHONPATH="$PWD/src:${PYTHONPATH:-}"
 export PYTHONUNBUFFERED=1 TOKENIZERS_PARALLELISM=false
 export TMPDIR="/scratch/usr/$USER/tmp/${SLURM_JOB_ID:-$$}"
 mkdir -p "$TMPDIR" "$SCRATCH/ray_results" "$SCRATCH/optuna"
 
-python -u -m train_hyper \
+python -u -m finetuning.train_hyper \
     -c configs/train/medium_hailmary_phase1.config \
     --storage_path   "$SCRATCH/ray_results" \
     --optuna_db_path "$SCRATCH/optuna/medium_wer_diff.db"

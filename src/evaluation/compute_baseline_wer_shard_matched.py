@@ -42,10 +42,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import ray
 
-from data_and_collator.datasets_and_collators import get_datasets_and_collators, make_dataset_kwargs
-from models.whisper_models import get_whisper_models
-from train_hyper import partition_dataset
-from projects_paths import DATA_PATH
+from finetuning.data_and_collator.datasets_and_collators import get_datasets_and_collators, make_dataset_kwargs
+from finetuning.models.whisper_models import get_whisper_models
+from finetuning.train_hyper import partition_dataset
+from finetuning.projects_paths import DATA_PATH
 
 _TAG_MAP = {
     "whisper-tiny": "tiny",
@@ -104,7 +104,7 @@ def main():
     tag = _TAG_MAP.get(args.model_type, args.model_type.replace("/", "_").replace("-", "_"))
     frac_tag = f"frac{args.eval_sample_fraction:.3f}".rstrip("0").rstrip(".")
     output_csv = args.output_csv or str(
-        PROJECT_ROOT / "trainers" / "data" / f"validation_summary_{tag}_{frac_tag}.csv"
+        PROJECT_ROOT / "finetuning" / "trainers" / "data" / f"validation_summary_{tag}_{frac_tag}.csv"
     )
 
     print(f"model_type           : {args.model_type}")

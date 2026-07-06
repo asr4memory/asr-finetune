@@ -10,7 +10,7 @@ new distributions.
 
 Run on the login node (cheap, ~5 s):
 
-    PYTHONPATH=src python -m scripts.migrate_optuna_to_hailmary \
+    PYTHONPATH=src python -m finetuning.searchers_and_schedulers.migrate_optuna_to_hailmary \
         --old_db   "$OPTUNA_DIR/cw_wer_diff.db" \
         --old_name cw_wer_diff_study \
         --new_db   "$OPTUNA_DIR/cw_wer_diff.db" \

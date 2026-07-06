@@ -80,10 +80,11 @@ _TAG_MAP = {
 }
 TAG = _TAG_MAP.get(MODEL_TYPE, MODEL_TYPE.replace("/", "_").replace("-", "_"))
 
-# This file lives at src/evaluation/; the baseline CSVs live at src/trainers/data/
-# (one directory up), which is what projects_paths.VALIDATION_SUMMARY_CSV points at.
+# This file lives at src/evaluation/; the baseline CSVs live at
+# src/finetuning/trainers/data/, which is what projects_paths.VALIDATION_SUMMARY_CSV
+# points at.
 SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUTPUT_CSV = os.path.join(SRC_DIR, "trainers", "data", f"validation_summary_{TAG}.csv")
+OUTPUT_CSV = os.path.join(SRC_DIR, "finetuning", "trainers", "data", f"validation_summary_{TAG}.csv")
 
 def normalize(text):
     def _one(t):

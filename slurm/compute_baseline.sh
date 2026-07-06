@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # Step 3 — compute the pretrained model's per-shard baseline WER.
-# Writes src/trainers/data/validation_summary_<tag>.csv, which the eval_wer_diff
+# Writes src/finetuning/trainers/data/validation_summary_<tag>.csv, which the eval_wer_diff
 # training objective is measured against. Needs one GPU.
 # Generic SLURM template — fill in every <...>, then: sbatch slurm/compute_baseline.sh
 # =============================================================================

@@ -14,11 +14,11 @@ Returns:
 - A `compute_metrics` function usable in HuggingFace training loops.
 """
 import evaluate
-from utils import normalize
+from finetuning.utils import normalize
 from pathlib import Path
 import os
 import sys
-from projects_paths import TRAINERS_PATH
+from finetuning.projects_paths import TRAINERS_PATH
 
 
 def _load_wer_metric():

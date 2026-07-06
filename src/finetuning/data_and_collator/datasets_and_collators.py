@@ -21,7 +21,7 @@ import os
 import shutil
 import h5py
 import ray
-from models.whisper_models import get_whisper_models
+from finetuning.models.whisper_models import get_whisper_models
 from .data_modes import get_data_modes
 
 import logging

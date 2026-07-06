@@ -6,11 +6,11 @@ import torch
 from peft import LoraConfig, prepare_model_for_kbit_training, get_peft_model
 from transformers import Seq2SeqTrainingArguments
 
-from models.whisper_models import get_whisper_models
+from finetuning.models.whisper_models import get_whisper_models
 from .custom_seq2seq_trainers_single import Seq2SeqTrainerEvalSamplingPeftSingle
 from .utils import data_collator_id, SavePeftModelCallback, LoadAdapterFromSubdirCallback
 from .ema_callback import AdapterEMACallback
-from utils import steps_per_epoch
+from finetuning.utils import steps_per_epoch
 
 import numpy as np
 from torch.utils.data import IterableDataset

@@ -17,7 +17,7 @@ import torch
 from transformers import set_seed, pipeline
 from pyannote.audio import Pipeline as DiarizationPipeline
 
-from models.whisper_models import get_whisper_models_from_dir, get_whisper_models_from_hub
+from finetuning.models.whisper_models import get_whisper_models_from_dir, get_whisper_models_from_hub
 
 logger = logging.getLogger(__name__)
 

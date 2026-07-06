@@ -1,5 +1,5 @@
 from ray.tune.schedulers import ASHAScheduler
-from utils import steps_per_epoch, calculate_grace_period
+from finetuning.utils import steps_per_epoch, calculate_grace_period
 import optuna
 import os
 import sys
@@ -10,7 +10,7 @@ from ray import tune
 
 # ``scripts/`` is importable because entry points put src/ on sys.path; this
 # enables on-demand auto-migration of Optuna studies to a new search space.
-from scripts.migrate_optuna_to_hailmary import maybe_auto_migrate as _maybe_auto_migrate
+from finetuning.searchers_and_schedulers.migrate_optuna_to_hailmary import maybe_auto_migrate as _maybe_auto_migrate
 
 import logging
 

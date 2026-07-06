@@ -1,7 +1,8 @@
 # PEFT method & the baseline-corrected objective
 
-Rationale behind the fine-tuning design in `src/trainers/` and
-`src/searchers_and_schedulers/`, so the code's non-obvious choices are documented.
+Rationale behind the fine-tuning design in `src/finetuning/trainers/` and
+`src/finetuning/searchers_and_schedulers/`, so the code's non-obvious choices are
+documented. (Paths below are relative to `src/finetuning/`.)
 
 ## LoRA + DoRA (not AdaLoRA)
 
@@ -52,7 +53,7 @@ on a validation shard `i` sampled per evaluation:
 
 1. The validation set is split into shards of ~2000 samples.
 2. `compute_baseline_wer` evaluates the **pretrained** model on every shard once,
-   up front, writing `src/trainers/data/validation_summary_<tag>.csv`.
+   up front, writing `src/finetuning/trainers/data/validation_summary_<tag>.csv`.
 3. During HPO each trial's WER on the sampled shard is scored *relative to* that
    shard's baseline. Negative `eval_wer_diff` means the adapter beats pretrained.
 

@@ -65,12 +65,12 @@ def _get_tune_checkpoint():
         return None
 
 # get models
-from models.whisper_models import get_whisper_models
+from finetuning.models.whisper_models import get_whisper_models
 from peft import LoraConfig, prepare_model_for_kbit_training, PeftModel, LoraModel, get_peft_model
 
 # get data
-from data_and_collator.datasets_and_collators import get_datasets_and_collators
-from data_and_collator.hf_to_ray_custom_utils import prepare_trainer_custom
+from finetuning.data_and_collator.datasets_and_collators import get_datasets_and_collators
+from finetuning.data_and_collator.hf_to_ray_custom_utils import prepare_trainer_custom
 
 # HuggingFace
 from transformers import Seq2SeqTrainingArguments, Seq2SeqTrainer, TrainerCallback, TrainingArguments, TrainerState, TrainerControl
@@ -88,7 +88,7 @@ from .utils import (
 )
 from .ema_callback import AdapterEMACallback
 from .metrics import get_metric_to_optimize
-from utils import  steps_per_epoch, normalize
+from finetuning.utils import  steps_per_epoch, normalize
 import pandas as pd
 
 from transformers.trainer_utils import EvalLoopOutput
@@ -157,7 +157,7 @@ class Seq2SeqTrainerEvalSampling(Seq2SeqTrainer):
         validation_summary_csv: str = None,
         **kwargs):
         if validation_summary_csv is None:
-            from projects_paths import VALIDATION_SUMMARY_CSV
+            from finetuning.projects_paths import VALIDATION_SUMMARY_CSV
             validation_summary_csv = VALIDATION_SUMMARY_CSV
         
         super().__init__(*args, **kwargs)
@@ -937,7 +937,7 @@ def train_whisper_model(config, training_kwargs=None, data_collators=None, eval_
         trainer.eval_shards = eval_shards
         # Optional fallback dir for standalone parquet-based eval; derived from
         # $DATA_PATH so it is never tied to a specific user's scratch space.
-        from projects_paths import DATA_PATH as _DATA_PATH
+        from finetuning.projects_paths import DATA_PATH as _DATA_PATH
         trainer.eval_parquet_dir = os.path.join(
             _DATA_PATH, "eg_dataset_complete_v3_sharded", "val_parquet"
         )

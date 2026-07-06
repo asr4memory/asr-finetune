@@ -22,7 +22,7 @@ import pprint
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
-from utils import list_of_strings, save_file
+from finetuning.utils import list_of_strings, save_file
 from transformers import set_seed
 
 # For code organization and reporting
@@ -36,16 +36,16 @@ from ray.train.torch import TorchTrainer
 from ray.train import ScalingConfig, CheckpointConfig
 from ray.tune import Tuner, RunConfig
 
-from trainers.trainers import make_seq2seq_training_kwargs as make_training_kwargs
-from trainers.trainers import train_whisper_model, train_whisper_peft_model
-from searchers_and_schedulers.ray_searchers_and_schedulers import get_searcher_and_scheduler
-from searchers_and_schedulers.ray_searchers_and_schedulers import get_whisper_hyperparameters as get_hyperparameters
+from finetuning.trainers.trainers import make_seq2seq_training_kwargs as make_training_kwargs
+from finetuning.trainers.trainers import train_whisper_model, train_whisper_peft_model
+from finetuning.searchers_and_schedulers.ray_searchers_and_schedulers import get_searcher_and_scheduler
+from finetuning.searchers_and_schedulers.ray_searchers_and_schedulers import get_whisper_hyperparameters as get_hyperparameters
 
 from transformers import Seq2SeqTrainingArguments, Seq2SeqTrainer
 
 # Datasets
-from data_and_collator.datasets_and_collators import get_datasets_and_collators, make_dataset_kwargs
-from projects_paths import DATA_PATH
+from finetuning.data_and_collator.datasets_and_collators import get_datasets_and_collators, make_dataset_kwargs
+from finetuning.projects_paths import DATA_PATH
 
 from pathlib import Path
 import csv
@@ -359,7 +359,7 @@ if __name__ == "__main__":
     )
 
     # Model loading (unchanged)
-    from models.whisper_models import get_whisper_models
+    from finetuning.models.whisper_models import get_whisper_models
 
     base_training_kwargs = make_training_kwargs(args)
 
@@ -373,7 +373,7 @@ if __name__ == "__main__":
 
     logger.info("Starting Validation for model %s", args.model_type)
 
-    from trainers.metrics import get_metric_to_optimize
+    from finetuning.trainers.metrics import get_metric_to_optimize
     compute_metrics = get_metric_to_optimize("wer", tokenizer=tokenizer)
 
     results = {}

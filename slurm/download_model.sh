@@ -11,7 +11,7 @@ export MODEL_PATH=<MODEL_PATH>          # parent dir for the model sub-directory
 cd "$(dirname "$0")/.."                  # repo root
 export PYTHONPATH="$PWD/src:${PYTHONPATH:-}"
 
-python src/scripts/download_hf_model.py \
+python scripts/download_hf_model.py \
     --model_id openai/whisper-large-v3 \
     --output_dir "$MODEL_PATH/whisper-large-v3"
 

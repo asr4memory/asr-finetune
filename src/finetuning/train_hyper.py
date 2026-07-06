@@ -18,9 +18,16 @@ To adapt to another task or model, modify get_models(), train_model(), and get_h
 """
 # General
 import os
+import sys
+from pathlib import Path
+
+# Make src/ importable so the finetuning package resolves whether this is run via
+# ``python -m finetuning.train_hyper`` or directly as a script.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import pprint
 import numpy as np
-from utils import list_of_strings, save_file
+from finetuning.utils import list_of_strings, save_file
 from transformers import set_seed
 from functools import partial
 
@@ -43,15 +50,15 @@ except ImportError:
     except ImportError:
         from ray.air import RunConfig          # Ray ~2.0-2.4
 
-from trainers.trainers import make_seq2seq_training_kwargs as make_training_kwargs
-from trainers.trainers import train_whisper_model, train_whisper_peft_model
-from searchers_and_schedulers.ray_searchers_and_schedulers import get_searcher_and_scheduler
-from searchers_and_schedulers.ray_searchers_and_schedulers import get_whisper_hyperparameters as get_hyperparameters
-from searchers_and_schedulers.stoppers import DecorrelationStopper
+from finetuning.trainers.trainers import make_seq2seq_training_kwargs as make_training_kwargs
+from finetuning.trainers.trainers import train_whisper_model, train_whisper_peft_model
+from finetuning.searchers_and_schedulers.ray_searchers_and_schedulers import get_searcher_and_scheduler
+from finetuning.searchers_and_schedulers.ray_searchers_and_schedulers import get_whisper_hyperparameters as get_hyperparameters
+from finetuning.searchers_and_schedulers.stoppers import DecorrelationStopper
 
 # Datasets
-from data_and_collator.datasets_and_collators import get_datasets_and_collators, make_dataset_kwargs
-from projects_paths import DATA_PATH
+from finetuning.data_and_collator.datasets_and_collators import get_datasets_and_collators, make_dataset_kwargs
+from finetuning.projects_paths import DATA_PATH
 
 # Logging control
 os.environ["RAY_AIR_NEW_OUTPUT"] = "1"

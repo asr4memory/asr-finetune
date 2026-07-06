@@ -30,14 +30,14 @@ import ray
 import torch
 from transformers import set_seed
 
-from data_and_collator.datasets_and_collators import (
+from finetuning.data_and_collator.datasets_and_collators import (
     get_datasets_and_collators,
     make_dataset_kwargs,
 )
-from models.whisper_models import get_whisper_models
-from trainers.metrics import get_metric_to_optimize
-from trainers.utils import normalize as normalize_fn
-from projects_paths import DATA_PATH
+from finetuning.models.whisper_models import get_whisper_models
+from finetuning.trainers.metrics import get_metric_to_optimize
+from finetuning.trainers.utils import normalize as normalize_fn
+from finetuning.projects_paths import DATA_PATH
 
 
 def partition_with_anchor(ds, fraction: float, anchor_size: int):
@@ -200,7 +200,7 @@ def parse_args():
     p.add_argument("--eval_sample_fraction", type=float, default=0.05,
                    help="Random-shard size as a fraction of (val_total - anchor_size).")
     p.add_argument("--anchor_size", type=int, default=2000)
-    p.add_argument("--output_csv", default=str(PROJECT_ROOT / "trainers" / "data" / "validation_summary.csv"))
+    p.add_argument("--output_csv", default=str(PROJECT_ROOT / "finetuning" / "trainers" / "data" / "validation_summary.csv"))
     p.add_argument("--cpus_per_trial", type=int, default=2)
     p.add_argument("--random_seed", type=int, default=1337)
     p.add_argument("--max_length", type=int, default=225)

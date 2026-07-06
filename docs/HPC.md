@@ -1,7 +1,7 @@
 # Running on an HPC / SLURM cluster
 
 The pipeline is cluster-agnostic: everything machine-specific is passed through
-environment variables (read by `src/projects_paths.py`) and a handful of SLURM
+environment variables (read by `src/finetuning/projects_paths.py`) and a handful of SLURM
 directives. To port it to your cluster you only edit those, not the Python code.
 
 ## The job templates

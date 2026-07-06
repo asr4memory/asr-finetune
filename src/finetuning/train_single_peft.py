@@ -8,21 +8,27 @@ Minimal-change version:
 """
 
 import os
+import sys
 import math
 import pprint
 import logging
+from pathlib import Path
+
+# Make src/ importable so the finetuning package resolves whether this is run via
+# ``python -m finetuning.train_single_peft`` or directly as a script.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import ray
 import ray.data
 import configargparse
 from transformers import set_seed
 
-from utils import list_of_strings, save_file
-from data_and_collator.datasets_and_collators import get_datasets_and_collators, make_dataset_kwargs
-from projects_paths import DATA_PATH, VALIDATION_SUMMARY_CSV
+from finetuning.utils import list_of_strings, save_file
+from finetuning.data_and_collator.datasets_and_collators import get_datasets_and_collators, make_dataset_kwargs
+from finetuning.projects_paths import DATA_PATH, VALIDATION_SUMMARY_CSV
 
-from trainers.trainers import make_seq2seq_training_kwargs as make_training_kwargs
-from trainers.trainers_single import train_whisper_peft_model_single
+from finetuning.trainers.trainers import make_seq2seq_training_kwargs as make_training_kwargs
+from finetuning.trainers.trainers_single import train_whisper_peft_model_single
 
 logger = logging.getLogger(__name__)
 

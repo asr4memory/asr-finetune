@@ -26,7 +26,7 @@ import pprint
 import os
 import json
 
-from utils import save_file, normalize
+from finetuning.utils import save_file, normalize
 
 import evaluate
 import safetensors
@@ -40,7 +40,7 @@ except ImportError:
         return lin
 
 import torch
-from data_and_collator.streaming import create_ray_indexloader, SimpleStreamingCollator
+from finetuning.data_and_collator.streaming import create_ray_indexloader, SimpleStreamingCollator
 
 
 def resolve_adapter_dir(path):
@@ -75,7 +75,7 @@ import logging
 # For Dataset preparation
 
 # get models
-from models.whisper_models import get_whisper_models_from_dir, get_whisper_models_from_hub
+from finetuning.models.whisper_models import get_whisper_models_from_dir, get_whisper_models_from_hub
 
 logger = logging.getLogger(__name__)
 

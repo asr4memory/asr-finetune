@@ -19,15 +19,16 @@ from pathlib import Path
 import os
 
 # Derive PROJECT_ROOT from this file's location so the repo can live anywhere.
-# PROJECT_ROOT is the ``src/`` directory (this file sits at src/projects_paths.py).
-# Override via env var ASR_FINETUNE_ROOT if you need to point elsewhere.
+# PROJECT_ROOT is the finetuning package directory (this file sits at
+# src/finetuning/projects_paths.py). Override via env var ASR_FINETUNE_ROOT.
 PROJECT_ROOT = os.environ.get(
     "ASR_FINETUNE_ROOT",
     str(Path(__file__).resolve().parent),
 )
 
-# Repository root (one level above src/); used for portable default fallbacks.
-REPO_ROOT = os.path.dirname(PROJECT_ROOT)
+# Repository root (two levels above the finetuning package: src/finetuning -> src
+# -> repo). Used only for the portable default fallbacks below.
+REPO_ROOT = str(Path(__file__).resolve().parents[2])
 
 # Base directory holding the pre-downloaded Whisper models, one sub-directory per
 # model type (e.g. MODEL_PATH/whisper-large-v3/{model,processor,tokenizer,

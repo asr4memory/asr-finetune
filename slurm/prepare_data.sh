@@ -27,9 +27,7 @@ cd "${SLURM_SUBMIT_DIR:-$PWD}"
 export PYTHONPATH="$PWD/src:${PYTHONPATH:-}"
 export PYTHONUNBUFFERED=1 TOKENIZERS_PARALLELISM=false
 
+# Settings live in configs/prepare/materialize.config; override per split on the CLI.
 # Repeat per split: train_parquet / val_parquet / test_parquet
-python -u -m prepare_data.materialize_dataset \
-    --hdf5_path   "$DATA_PATH/eg_dataset_complete_v3_train.h5" \
-    --output_path "$DATA_PATH/eg_dataset_complete_v3_sharded" \
-    --split       train_parquet \
-    --model_type  whisper-large-v3
+python -u -m prepare_data.materialize_dataset -c configs/prepare/materialize.config \
+    --split train_parquet
