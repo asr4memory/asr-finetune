@@ -1,0 +1,41 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the accompanying article below."
+title: "asr-finetune: parameter-efficient fine-tuning of Whisper for oral-history ASR"
+abstract: >-
+  Code for parameter-efficient fine-tuning of OpenAI Whisper using LoRA/DoRA
+  adapters, with Bayesian hyper-parameter optimization (Optuna TPE + ASHA on Ray
+  Tune) and a baseline-corrected per-shard WER objective.
+type: software
+authors:
+  - family-names: Horvat
+    given-names: Christian
+  - family-names: Kompiel
+    given-names: Peter
+  - family-names: Kilgus
+    given-names: Tobias
+repository-code: "https://github.com/asr4memory/asr-finetune"
+license: AGPL-3.0-or-later
+keywords:
+  - automatic speech recognition
+  - Whisper
+  - LoRA
+  - DoRA
+  - parameter-efficient fine-tuning
+  - hyperparameter optimization
+  - oral history
+  - digital humanities
+preferred-citation:
+  type: article
+  title: >-
+    Adapting Automatic Speech Recognition for Oral History: A Case Study for
+    Fine-tuning the Whisper Model with Curated and Domain-specific Training Data
+  authors:
+    - family-names: Horvat
+      given-names: Christian
+    - family-names: Kompiel
+      given-names: Peter
+    - family-names: Kilgus
+      given-names: Tobias
+  journal: "Zeitschrift für digitale Geisteswissenschaften (ZfdG)"
+  year: 2026
+  notes: "Forthcoming."

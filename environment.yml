@@ -1,0 +1,18 @@
+# Conda environment for the asr-finetune project.
+#
+#   conda env create -f environment.yml
+#   conda activate asr-finetune
+#
+# NOTE: this installs the default (PyPI) torch wheel. On a GPU cluster, install a
+# CUDA-matched torch first (see requirements.txt) or reinstall torch afterwards:
+#   pip install torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+name: asr-finetune
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - libsndfile        # native library required by soundfile
+  - pip:
+      - -r requirements.txt
