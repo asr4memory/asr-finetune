@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Transcript Comparison – Nixon Library – George McGovern</title>
+<style>
+  :root {
+    --color-base: #b5450a;
+    --color-fine: #177a17;
+    --border: #ddd;
+    --bg-head: #fafafa;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: #1a1a1a;
+    background: #fff;
+    margin: 0;
+    padding: 24px;
+  }
+  header {
+    max-width: 1100px;
+    margin: 0 auto 20px;
+  }
+  h1 {
+    font-size: 1.4rem;
+    margin: 0 0 8px;
+  }
+  .legend {
+    font-size: 0.9rem;
+    margin: 12px 0;
+  }
+  .legend span {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    margin-right: 6px;
+  }
+  .swatch-base { background: color-mix(in srgb, var(--color-base) 15%, white); color: var(--color-base); font-weight: 600; }
+  .swatch-fine { background: color-mix(in srgb, var(--color-fine) 15%, white); color: var(--color-fine); font-weight: 600; }
+  .redaction-legend { color: #555; }
+  .archive-note {
+    font-size: 0.9rem;
+    background: #f5f5f5;
+    border-left: 3px solid #888;
+    padding: 8px 12px;
+    margin: 12px 0 0;
+  }
+  .archive-note a { color: #0645ad; }
+  table {
+    width: 100%;
+    max-width: 1100px;
+    margin: 0 auto;
+    border-collapse: collapse;
+    font-size: 0.95rem;
+  }
+  thead th {
+    position: sticky;
+    top: 0;
+    background: var(--bg-head);
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 2px solid var(--border);
+  }
+  td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  td.tc {
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    color: #666;
+    width: 1%;
+  }
+  td.cell-base, td.cell-fine {
+    width: 49.5%;
+  }
+  tbody tr:nth-child(even) { background: #fbfbfb; }
+  .d-base { color: var(--color-base); font-weight: 600; }
+  .d-fine { color: var(--color-fine); font-weight: 600; }
+  @media print {
+    thead th { position: static; }
+    tbody tr { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Transcript Comparison – Nixon Library – George McGovern</h1>
+  <p class="archive-note">
+      This transcript comparison shows the differences between the baseline whisper-large-v3 model and the Fine-tuned model, both converted to the faster-whisper CTranslate2 format.
+  </p>
+  <p class="archive-note">
+      The original recording is public domain and can be viewed in the
+      <a href="https://commons.wikimedia.org/wiki/File:Nixon_Library%27s_Oral_History_with_George_McGovern.webm" target="_blank" rel="noopener">Wikimedia Commons</a>
+  </p>
+  <p class="legend">
+    <span class="swatch-base">orange</span> only in Baseline Model
+    &nbsp;
+    <span class="swatch-fine">green</span> only in Fine-tuned Model
+  </p>
+</header>
+<table>
+  <thead>
+    <tr>
+      <th>Time</th>
+      <th>Baseline Model</th>
+      <th>Fine-tuned Model</th>
+    </tr>
+  </thead>
+  <tbody lang="de">
+      <tr>
+        <td class="tc">00:00:06.402</td>
+        <td class="cell-base">Hi, I&#x27;m Tim Naftali.</td>
+        <td class="cell-fine">Hi, I&#x27;m Tim Naftali.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:00:08.042</td>
+        <td class="cell-base">I&#x27;m the director of the Richard Nixon Presidential Library and Museum in Yorba Linda, California.</td>
+        <td class="cell-fine">I&#x27;m the director of the Richard Nixon Presidential Library and Museum in Yorba Linda, California.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:00:12.606</td>
+        <td class="cell-base">It&#x27;s August 26, 2009, and I have the honor and privilege to be interviewing Senator George McGovern for the Nixon Oral History Program.</td>
+        <td class="cell-fine">It&#x27;s August 26, 2009, and I have the honor and privilege to be interviewing Senator George McGovern for the Nixon Oral History Program.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:00:19.972</td>
+        <td class="cell-base">Senator McGovern, thank you so much for being here and for doing this.</td>
+        <td class="cell-fine">Senator McGovern, thank you so much for being here and for doing this.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:00:22.574</td>
+        <td class="cell-base">It&#x27;s my pleasure.</td>
+        <td class="cell-fine">It&#x27;s my pleasure.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:00:25.556</td>
+        <td class="cell-base">For the sake of our viewers and visitors upstairs, tell us what you did in the 1960 campaign.</td>
+        <td class="cell-fine"><span class="d-fine">Uh,</span> for the sake of our viewers and visitors upstairs, <span class="d-fine">uh,</span> tell us what you did in the 1960 campaign.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:00:32.369</td>
+        <td class="cell-base">Well, I campaigned for Senator John Kennedy, who was running for president that year, against Richard Nixon.</td>
+        <td class="cell-fine">Well, I campaigned for, <span class="d-fine">uh,</span> Senator John Kennedy, who was running for president that year against, <span class="d-fine">uh,</span> Richard Nixon.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:00:42.878</td>
+        <td class="cell-base">It was a very tight race.</td>
+        <td class="cell-fine">It was a very tight race.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:00:45.560</td>
+        <td class="cell-base">I had no idea how tight it was going to be until the votes were counted.</td>
+        <td class="cell-fine">I had no idea how tight it was going to be until the votes were counted. <span class="d-fine">Um,</span></td>
+      </tr>
+      <tr>
+        <td class="tc">00:00:53.026</td>
+        <td class="cell-base">Jack Kennedy won that race by 120,000 votes out of probably 75 million.</td>
+        <td class="cell-fine">Jack Kennedy won that race by 120,000 votes out of probably 75 million.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:01:01.744</td>
+        <td class="cell-base">It was less than one-fifth of a percentage point in each precinct that made the difference in that race.</td>
+        <td class="cell-fine">It was less than one-fifth of a percentage point in each precinct that made the difference in that race.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:01:12.924</td>
+        <td class="cell-base">I was always interested that President Nixon, later on President Nixon, never called for a recount in a race that close, but he took the view that while it had been close,</td>
+        <td class="cell-fine">I was always interested that, <span class="d-fine">uh,</span> President Nixon, later on President Nixon, never, <span class="d-fine">uh,</span> called for a recount, <span class="d-fine">uh,</span> in a race that close, but, <span class="d-fine">uh,</span> he took the view that while it had been close,</td>
+      </tr>
+      <tr>
+        <td class="tc">00:01:28.532</td>
+        <td class="cell-base">he was defeated and he accepted his loss.</td>
+        <td class="cell-fine">he was defeated and he accepted his loss.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:01:33.566</td>
+        <td class="cell-base">I was also running for the United States Senate for the first time, running against Carl Mundt, an entrenched senator who had been in office longer than anybody else in the history of South Dakota.</td>
+        <td class="cell-fine">I was also running for the United States Senate for the first time, running against Carl Mundt, an entrenched, <span class="d-fine">uh,</span> senator who had, been in office longer than anybody else in the history of South Dakota.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:01:49.082</td>
+        <td class="cell-base">He was a tough opponent and I lost by one percentage point.</td>
+        <td class="cell-fine">He was a tough opponent and, <span class="d-fine">uh,</span> I lost by one percentage point.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:01:56.745</td>
+        <td class="cell-base">Jack Kennedy lost South Dakota overwhelmingly, but it was my first experience in a dual situation running for the United States Senate on my own and then trying to help a presidential candidate,</td>
+        <td class="cell-fine">Jack Kennedy lost South Dakota overwhelmingly. But, <span class="d-fine">uh,</span> it was my first, <span class="d-fine">uh,</span> experience in a dual situation running for the United States Senate on my own. And then trying to help a presidential candidate,</td>
+      </tr>
+      <tr>
+        <td class="tc">00:02:14.208</td>
+        <td class="cell-base">namely Jack Kennedy, in the race against Mr. Nixon.</td>
+        <td class="cell-fine">namely Jack Kennedy, in the race against, <span class="d-fine">uh,</span> Mr. Nixon.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:02:20.151</td>
+        <td class="cell-base">I wanted to ask you about the... You attended the 1948 Progressive Convention, did you?</td>
+        <td class="cell-fine">I wanted to ask you about the, <span class="d-fine">uh,</span> <span class="d-fine">you,</span> you attended the 1948 Progressive Convention, did you <span class="d-fine">ask?</span></td>
+      </tr>
+      <tr>
+        <td class="tc">00:02:26.492</td>
+        <td class="cell-base">Yes.</td>
+        <td class="cell-fine">Yes.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:02:27.353</td>
+        <td class="cell-base">I was for Henry Wallace in 1948.</td>
+        <td class="cell-fine">I was for, <span class="d-fine">uh,</span> Henry Wallace in, <span class="d-fine">uh,</span> 1948.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:02:32.633</td>
+        <td class="cell-base">He had been a very successful Secretary of Agriculture Maybe the best one in American history.</td>
+        <td class="cell-fine">He had been a very successful secretary of agriculture. Maybe the best one in American history.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:02:41.846</td>
+        <td class="cell-base">Franklin Roosevelt named him as his Secretary of Agriculture.</td>
+        <td class="cell-fine"><span class="d-fine">Uh,</span> Franklin Roosevelt named him as his, <span class="d-fine">uh,</span> Secretary of Agriculture.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:02:47.830</td>
+        <td class="cell-base">South Dakota is one of the most agricultural-oriented states in the Union.</td>
+        <td class="cell-fine">South Dakota is one of the most, <span class="d-fine">uh,</span> agricultural-oriented states in the Union.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:02:54.854</td>
+        <td class="cell-base">We depend heavily on farm income.</td>
+        <td class="cell-fine">We depend heavily on farm income.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:02:58.620</td>
+        <td class="cell-base">And I saw Wallace as a man who understood what could be called the <span class="d-base">family-sized</span> farmer in America.</td>
+        <td class="cell-fine">And I saw Wallace as a man who understood what could be called the <span class="d-fine">family</span> <span class="d-fine">size</span> farmer in America.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:03:09.657</td>
+        <td class="cell-base">So he was kind of a political hero.</td>
+        <td class="cell-fine">So he was kind of a political hero.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:03:13.193</td>
+        <td class="cell-base">Of mine coming as I did from an agricultural state.</td>
+        <td class="cell-fine">Of mine coming as I did from an agricultural state.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:03:18.157</td>
+        <td class="cell-base">Secondly, Wallace was the first prominent figure that I can recall who took exception to some of the excesses of the Cold War.</td>
+        <td class="cell-fine"><span class="d-fine">Uh,</span> secondly, Wallace was the first prominent figure that I can recall who took exception to some of the excesses of the Cold War.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:03:30.727</td>
+        <td class="cell-base">He thought that greater <span class="d-base">effort</span> should be made to deal with our problems with the Soviet Union and that a wide open arms race was not the best way.</td>
+        <td class="cell-fine">He thought that greater <span class="d-fine">efforts</span> should be made to, <span class="d-fine">uh,</span> deal with our problems with the Soviet Union and that a wide open arms race was not the best way.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:03:44.284</td>
+        <td class="cell-base">The United States and the Soviet Union were piling up nuclear weapons on a scale that if ever used, they would have destroyed every life on this planet.</td>
+        <td class="cell-fine">The United States and the, <span class="d-fine">uh,</span> Soviet Union were piling up nuclear weapons on a scale that if ever used, they would have destroyed every life on this planet.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:03:56.348</td>
+        <td class="cell-base">There&#x27;d been nothing left but a smoking chasm.</td>
+        <td class="cell-fine">There&#x27;d been nothing left but a smoking chasm.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:04:00.008</td>
+        <td class="cell-base">That worried me.</td>
+        <td class="cell-fine">That worried me.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:04:01.770</td>
+        <td class="cell-base">I was an old bomber pilot in World War II.</td>
+        <td class="cell-fine">I was an old bomber pilot in World War II.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:04:05.631</td>
+        <td class="cell-base">We didn&#x27;t have any nuclear weapons in the European theater, but we had heavy demolition bombs And dropping those bombs day after day convinced me that aerial bombardment was one mighty destructive enterprise.</td>
+        <td class="cell-fine">We didn&#x27;t have any nuclear weapons in the European theater, but we had heavy demolition bombs. And dropping those bombs <span class="d-fine">year</span> <span class="d-fine">after,</span> <span class="d-fine">not</span> <span class="d-fine">year,</span> day after day convinced me that aerial bombardment was one mighty destructive enterprise.</td>
+      </tr>
+      <tr>
+        <td class="tc">00:04:26.728</td>
+        <td class="cell-base">I was proud of my service in World War II because I thought we had no alternative except to stand up militarily against Adolf Hitler and his miserable crowd of tyrants.</td>
+        <td class="cell-fine">I was proud of my service in World War II because I thought we had no alternative except to stand up militarily against Adolf Hitler and his miserable crowd of tyrants.</td>
+      </tr>
+  </tbody>
+</table>
+</body>
+</html>
