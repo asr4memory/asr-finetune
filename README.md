@@ -1,111 +1,235 @@
-# Login on Zuse-HPC 
-There are different login nodes. The GPUs are in ```blogin2.nhr.zib.de``` and ```blogin1.nhr.zib.de```.
-So you need to ssh in ```USERNAME@blogin2.nhr.zib.de``` for example, [see here](https://nhr-zib.atlassian.net/wiki/spaces/PUB/pages/6717441/GPU+A100+partition)
+# asr-finetune — parameter-efficient fine-tuning of Whisper for oral-history ASR
 
-# Installation on Zuse-HPC 
+Fine-tune OpenAI's **Whisper** for domain-specific, verbatim automatic speech
+recognition (ASR) using **LoRA / DoRA** adapters, with hyper-parameter search
+driven by **Bayesian optimization (Optuna TPE + ASHA) on Ray Tune** and a
+**baseline-corrected WER objective**. This is the code accompanying the
+*asr4memory* case study on adapting Whisper for oral history (to appear in the
+*Zeitschrift für digitale Geisteswissenschaften*, ZfdG — see [Citation](#citation)).
 
-1. Create a folder of your choice in you $HOME HPC directory.
-2. Pull the repo into the folder.
-3. Install packages in the [requirements.txt](requirements.txt) in your conda environment of choice.
-   For example, ```module load anaconda3/2023.09``` and then 
-   - `conda create -n "finetune" python=3.12.7`  change "finetune" to your environment name of choice
-     (if you change the conda environment name, you need to change it in the `.sh` scripts as well!)
-   - Activate the environment `conda activate finetune`
-   - navigate into the asr-finetune folder and `pip install -r requirements.txt`
-   - Install soundfile from anaconda: `conda install -c conda-forge libsndfile`
+On the project's held-out oral-history test set, fine-tuning Whisper large-v3
+improves word error rate from **18.6 % to 13.3 %** without catastrophic
+forgetting on out-of-distribution audio.
 
-# Storage on Zuse-HPC
-There are 3 types of storage systems: 
+> A qualitative baseline-vs-fine-tuned comparison is available
+> [here](https://media.oral-history.digital/asr4memory/ev001_comparison_vanilla_may26.mp4).
 
-1. HOME ... the usual home directory (i.e. /home/$USER/)
-2. WORK ... the /scratch/ directory  
-3. PERM ... the permanent /perm/$USER
+---
+[materialize_dataset.py](src%2Fprepare_data%2Fmaterialize_dataset.py)
+## What this project does
 
-There are different quotas for each system, have a look [here](https://nhr-zib.atlassian.net/wiki/spaces/PUB/pages/428627/System+Quota).
-Important for us: WORK is designed for fast I/O operations so it makes sense to save data there.
-Also: with the new code, we need to pre-download the model to finetune.
-To avoid unnessary data storage, we can share both data and models in our project directory. 
-Our data ist stored in ```/scratch/usr/bemchrvt/data``` until we have a project directory.
+- **PEFT fine-tuning** — LoRA with **DoRA** (`use_dora=True`) on the attention
+  query/key/value and output projections of Whisper.
+- **Hyper-parameter optimization** — Ray Tune with an Optuna **TPE** sampler and
+  the **ASHA** early-stopping scheduler; runs many trials in parallel across GPUs
+  and nodes, with fault-tolerant resume.
+- **Baseline-corrected objective** — the HPO objective is
+  `eval_wer_diff = WER(fine-tuned) − WER(pretrained)` measured **per validation
+  shard**. The pretrained model is evaluated on each shard *once, up front*
+  (`compute_baseline_wer`), and every trial is scored against that anchor. This
+  isolates the adapter's effect from shard-to-shard difficulty and reduces the
+  objective's variance.
+- **Stability aids** — an EMA shadow of the adapter weights at evaluation
+  (`AdapterEMACallback`) and a `DecorrelationStopper` that kills trials whose
+  loss falls while WER rises (an overfitting signature).
+- **Standalone test-set evaluation** — `evaluation/evaluate.py` streams an HDF5
+  test set, loads a fine-tuned adapter (or the pretrained baseline), and reports
+  WER 
 
+---
 
-In PERM, we can store fine-tuned models. 
+## Repository layout
 
-# Download the model
-Different to the FU-Cluster, we need to pre-download the Whisper Model. For that:
+```
+asr-finetune/
+├── README.md  LICENSE  CITATION.cff  requirements.txt  environment.yml
+├── src/                             # Python source (put src/ on PYTHONPATH)
+│   ├── finetuning/                  # the fine-tuning engine (compact package)
+│   │   ├── train_hyper.py           # ★ HPO training entry point
+│   │   ├── train_single_peft.py     # ★ single fixed-config run (reproduce a trial)
+│   │   ├── projects_paths.py        # env-driven path resolution (MODEL_PATH, DATA_PATH, ...)
+│   │   ├── utils.py                 # shared helpers (normalize, steps_per_epoch, ...)
+│   │   ├── models/                  # Whisper loaders (local dir / HF hub)
+│   │   ├── data_and_collator/       # HDF5 / Parquet loaders, Ray streaming collators
+│   │   ├── trainers/                # training loops, PEFT build, EMA, WER metric
+│   │   │   └── data/                #   validation_summary_*.csv (per-shard baselines)
+│   │   └── searchers_and_schedulers/# Optuna/ASHA searchers, DecorrelationStopper, spaces
+│   ├── prepare_data/                # ★ materialize_dataset.py — HDF5 → Parquet features
+│   └── evaluation/                  # ★ evaluate.py, validate_model.py, compute_baseline_wer.py
+├── configs/                         # .config files (configargparse) — train/ eval/ prepare/
+├── scripts/                         # standalone helpers (download_hf_model.py)
+├── slurm/                           # runnable SLURM job templates (+ examples/ per cluster)
+└── docs/                            # MONITORING.md, HPC.md, design notes
+```
 
-1. Run `download_HF_model`
-2. Move the created folder to `/scratch/usr/$USER/whisper-large-v3`. In there, there should be the following folders:
-   - `feature_extractor`
-   - `model`
-   - `models--openai--whisper-large-v3`
-   - `processor`
-   - `tokenizer`
-3. You need to download the `WER` metric also manually. For that, `conda activate evaluate` (or whatever name you chose)
-   type `python` into the terminal, and then `import evaluate` and then `metric = evaluate.load("wer")`. This should
-   start a download of the metric. After that, stop `python` and proceed to the first job submission!
+The code is run with `src/` on the Python path (`PYTHONPATH=src`); it is **not**
+a pip-installable package. Entry points are invoked as
+`PYTHONPATH=src python -m finetuning.<module>` (training),
+`python -m evaluation.<module>`, or `python -m prepare_data.<module>`.
 
+---
 
-# First job submission 
+## 1. Install
 
-0. Activate your environment in your preferred way. E.g. in the `.bash_profile`, within the `.sh` script, or in terminal
-   (default: in the `.sh` script)
-1. Open [train_whisper_largev3.config](finetune/configs/train_whisper_largev3.config) and adjust the `path_to_data` to 
-   the path to the data folder you defined before. Then, adjust `dataset_name` to the name of the dataset you want to 
-   train on, default value is `eg_dataset_complete_v2.h5`. 
-   Hint: Use a subset of `eg_dataset_complete_v2.h5` for debugging, e.g. `eg_dataset_subset_1000.h5` in
-         [/Volumes/asr4mem/asr-daten-sets/finetuning/datasets/ready](/Volumes/asr4mem/asr-daten-sets/finetuning/datasets/ready)
-2. Submit a job on a single node via `sbatch finetune_large_debug.sh`
-3. Submit a job on multiple nodes via `sbatch finetune_large_debug_multi_node.sh`
+```bash
+git clone https://github.com/asr4memory/asr-finetune.git
+cd asr-finetune
 
-Remark: We use the `gpu-a100:test` [partition for testing](https://nhr-zib.atlassian.net/wiki/spaces/PUB/pages/430579/Slurm+partition+GPU+A100)
-        for debugging and testing.
+# Recommended: a fresh Python 3.12 environment (conda or venv)
+conda create -n asr-finetune python=3.12 && conda activate asr-finetune
+conda install -c conda-forge libsndfile        # native lib for soundfile
 
-*Some further notes*: 
-- All relevant files are automatically saved in the scratch folder [/scratch/src/USERNAME/](/scratch/USERNAME/). Results of the 
-submitted job with [data_modes.py](finetune%2Fminimal_version%2Fdata_and_collator%2Fdata_modes.py)efined `output_tag` are stored in [/scratch/USERNAME/ray_results/output_tag](/scratch/USERNAME/ray_results/output_tag) and the temporary
-files are automaticall stored in [/scratch/USERNAME/tmp](/scratch/USERNAME/tmp) 
-- For runs on you local machine for debugging, see the next section.
+# Install a CUDA-matched PyTorch FIRST (pick the index for your CUDA), then the rest:
+pip install torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+pip install -r requirements.txt
+```
 
+`environment.yml` provides a one-shot conda alternative (`conda env create -f
+environment.yml`); still reinstall a CUDA-matched torch on a GPU cluster.
 
-# Monitor jobs: Tensorboard and Ray Dashboard
+## 2. Set paths
 
-1.[train_single_model.py](finetune%2Ftrain_single_model.py) To track the progress of your experiments, log into you HPC account forwarding port 6007 onto you local machine through
-`ssh -L 16006:127.0.0.1:6007 USER@blogin2.nhr.zib.de`  (if you used `blogin2` as login node).
+All machine-specific locations are read from environment variables by
+`src/finetuning/projects_paths.py`. On a cluster, point them at fast scratch storage:
 
-Run `tensorboard --logdir /scratch/usr/$USER/ray_results/output_tag/ --bind_all` where output_tag is again the one from
-the config file (e.g. `whisper_large_jan`).
+```bash
+export MODEL_PATH=/path/to/models     # holds <model_type>/{model,processor,tokenizer,feature_extractor}
+export DATA_PATH=/path/to/data        # holds the Parquet shards and *_test.h5 files
+export PYTHONPATH="$PWD/src"          # makes the packages importable
+```
 
-2.  To track more general cluster utility, check the ray dashboard. For that, you need to 
-    - set up ray dashboard by installing `pip install -U "ray[default]"`
-    - start the dashboard config in the [finetune_large_debug_dashboard.sh](finetune_large_debug_dashboard.sh) script.
-      have a look [here](https://docs.ray.io/en/latest/ray-observability/getting-started.html) for more details
-    - forward port `8265` onto your local machine, so e.g. 
-      `ssh -L 16006:127.0.0.1:6007 -L 8265:127.0.0.1:8265 USER@blogin2.nhr.zib.de`.
-      Ray dashbaord should be accessible through `localhost:8265`.
+Optional: `VALIDATION_SUMMARY_CSV` (per-shard baseline CSV used by the training
+objective — see step 5) and `ASR_FINETUNE_ROOT` (override the source root). If
+unset, `MODEL_PATH`/`DATA_PATH` default to `<repo>/models_local` and `<repo>/data`.
+To extend to your own cluster, copy a `slurm/*.sh` template and set these there.
 
-3. There are more advanced ways for monitoring using [grafana dashboards](https://grafana.com/) and 
-   [Prometheus](https://prometheus.io/docs/introduction/overview/). For installation you can follow [this instruction](https://docs.ray.io/en/latest/cluster/configure-manage-dashboard.html)
-   however, we can also do a workshop which might be easier (took me quite some time to make it running).
+## 3. Download the base model
 
-# Useful formulas
+```bash
+python scripts/download_hf_model.py \
+    --model_id openai/whisper-large-v3 \
+    --output_dir "$MODEL_PATH/whisper-large-v3"
 
-Here are some formulas to understand how many training steps are needed and how many iterations are needed (relevant 
-for undertanding the tensorboard loggings)
+# Cache the WER metric once so later runs work offline:
+python -c "import evaluate; evaluate.load('wer')"
+```
 
-`total_Gradient_steps = round_up(length_train_set / per_device_train_batch_size) * num_epochs`
+This writes the four components (`model/`, `processor/`, `feature_extractor/`,
+`tokenizer/`) into `$MODEL_PATH/whisper-large-v3/`, the layout the loaders expect.
+`--model_id nyrahealth/CrisperWhisper` fetches CrisperWhisper instead.
 
-`iterations = round_up(total_Gradient_steps / save_steps)`
+## 4. Prepare the dataset
 
-# Parameter Efficient Finetuning (PEFT)
+Training reads **pre-computed Parquet feature shards**; the standalone evaluator
+reads the **HDF5 test set** directly. Edit `configs/prepare/materialize.config`
+(input `hdf5_path`, `output_path`, `split`, `model_type`, `num_shards`), then
+materialize each split one at a time:
 
-We follow the tutorial from [here](https://github.com/Vaibhavs10/fast-whisper-finetuning).
-In short: PEFT allows to train large models on small resources as not all but only a fraction of the parameters are 
-trained. 
+```bash
+PYTHONPATH=src python -m prepare_data.materialize_dataset -c configs/prepare/materialize.config
+# then edit split -> val_parquet (and hdf5_path -> *_val.h5) and re-run
+```
 
+Any config value can be overridden on the command line, e.g.
+`... -c configs/prepare/materialize.config --split val_parquet --hdf5_path "$DATA_PATH/..._val.h5"`.
 
+Expected data directory contract: `train_parquet/` and `val_parquet/` shards for
+training, plus `<dataset_name>_test.h5` for evaluation, all under `$DATA_PATH`.
 
-# UPDATES 19.10
+## 5. Compute the per-shard baseline WER
 
-[//]: # (PATH are now defined in projects_paths and should be adjusted there)
+The HPO objective is measured *relative to the pretrained model*, so first record
+the pretrained WER on every validation shard:
 
-[ ] Add datasets parquet preparation (materialize_ds.sh in curta zedat)
+```bash
+PYTHONPATH=src python -m evaluation.compute_baseline_wer --model_type whisper-small
+# writes src/finetuning/trainers/data/validation_summary_<tag>.csv
+```
+
+Point `VALIDATION_SUMMARY_CSV` at the CSV that matches your model and
+`eval_sample_fraction` (e.g. `validation_summary_ws_frac0.05.csv`). A set of
+baselines for tiny/small/medium is already committed under `src/finetuning/trainers/data/`.
+
+## 6. Train
+
+**Hyper-parameter optimization (main entry point):**
+
+```bash
+PYTHONPATH=src python -m finetuning.train_hyper \
+    -c configs/train/small_hailmary_phase1.config \
+    --storage_path   "$SCRATCH/ray_results" \
+    --optuna_db_path "$SCRATCH/optuna/small_wer_diff.db"
+```
+
+Key config knobs: `search_schedule_mode=large_small_OPTUNA`, `num_samples`
+(trials), `metric_to_optimize=eval_wer_diff`, `eval_sample_fraction`,
+`hyperparameters=learning_rate_lora,warmup_ratio,alpha_coupled,target_r_wide,lora_dropout`,
+`decorr_stopper`, `ema_decay`. Re-running the same command **resumes** the Ray
+Tune experiment and the Optuna study (`resume_training=True`).
+
+**Single fixed-config run** (reproduce the best trial deterministically):
+
+```bash
+PYTHONPATH=src python -m finetuning.train_single_peft -c configs/train/small_hailmary_phase1.config
+```
+
+## 7. Evaluate on the test set
+
+Set `model_ckpt_path` (the best-trial checkpoint/adapter directory) and
+`path_to_data` in an eval config, then:
+
+```bash
+# smoke test on 5 batches first:
+PYTHONPATH=src python -m evaluation.evaluate -c configs/eval/small_hailmary.config --max_eval_batches 5
+# full run:
+PYTHONPATH=src python -m evaluation.evaluate -c configs/eval/small_hailmary.config
+```
+
+The evaluator resolves nested adapter directories, guards against DoRA/peft
+version mismatches, and writes per-utterance results to `eval_final.json` /
+`eval_step_<N>.json` (corpus WER is the mean over utterances). It reports **WER**
+only. Use `configs/eval/<size>_baseline.config` (with `peft=False`) for the
+pretrained baseline.
+
+## 8. Monitoring & HPC
+
+- **Monitoring** (TensorBoard + the Ray dashboard) — see [`docs/MONITORING.md`](docs/MONITORING.md).
+- **HPC / SLURM** — generic job templates live in `slurm/` (fill in the `<...>`
+  placeholders); concrete worked examples for two clusters are in
+  `slurm/examples/`. See [`docs/HPC.md`](docs/HPC.md).
+
+---
+
+## Reproducing the paper
+
+The reported best model fine-tunes **whisper-large-v3** with LoRA+DoRA on the
+attention `q/k/v` and output projections, bf16 mixed precision, batch size 8,
+`random_seed = 1337`. Best hyper-parameters found by the search:
+
+| Hyper-parameter | Best value |
+|---|---|
+| learning rate | 1.99e-4 |
+| warm-up ratio | 0.01 |
+| alpha multiplier (`alpha_coupled`) | 1 |
+| target rank (`target_r`) | 8 |
+| LoRA dropout | 0.05 |
+
+The best model came from early training (~1000 steps ≈ 8 h of audio). Training
+used 4×A100 GPUs (~48 h); evaluation used a single RTX 2080 Ti (~17 h). See the
+per-model baseline CSVs in `src/finetuning/trainers/data/` and the design notes in
+`docs/design/` for the rationale behind DoRA, the α-coupling, and the resume fixes.
+
+## Citation
+
+If you use this code, please cite the accompanying article:
+
+> Christian Horvat, Peter Kompiel, Tobias Kilgus.
+> *Adapting Automatic Speech Recognition for Oral History: A Case Study for
+> Fine-tuning the Whisper Model with Curated and Domain-specific Training Data.*
+> Zeitschrift für digitale Geisteswissenschaften (ZfdG), forthcoming.
+
+A machine-readable entry is in [`CITATION.cff`](CITATION.cff).
+
+## License
+
+See [`LICENSE`](LICENSE).

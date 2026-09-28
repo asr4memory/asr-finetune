@@ -1,0 +1,22 @@
+{
+  "config.train_loop_config.learning_rate": {
+    "type": "float",
+    "low": 5e-6,
+    "high": 1e-4,
+    "log": true
+  },
+  "config.train_loop_config.per_device_train_batch_size": {
+    "type": "categorical",
+    "choices": [1, 2, 4, 8]
+  },
+  "config.train_loop_config.weight_decay": {
+    "type": "float",
+    "low": 1e-6,
+    "high": 1e-2,
+    "log": true
+  },
+  "config.train_loop_config.warmup_ratio": {
+    "type": "categorical",
+    "choices": [0.01, 0.03, 0.05, 0.1]
+  }
+}

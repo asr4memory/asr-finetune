@@ -1,39 +1,35 @@
-data
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# OS / editor / tooling
+.DS_Store
+.idea/
+.vscode/
+.claude/
+
+# Local data, models, and run artifacts — never commit these
+/data
 /data_example
+/models_local
+output/
+ray_results/
+*.db
+*.h5
+*.parquet
+slurm-*.out
+*.log
 
-/asr-classification/
-/finetune/.ipynb_checkpoints
-/finetune/dictionary_check.ipynb
-/finetune/output/*
+# The paper manuscript is distributed via the published article, not the repo
+docs/paper/*.docx
 
-/finetune/configs/tiny_debug.config
-
-
-__pycache__
-
-/finetune/__pycache__
-
-.idea
-
-
-/hpc_fu
-
-*.DS_Store
-
-/finetune/benchmark_dataloaders/benchmark_results/*
-benchmark_dataloader.py
-
-/finetune/configs/cpus_test.config
-
-/finetune/benchmark_dataloaders/cpus_test.py
-
-
-
-/finetune/__pychache__/*
-
-
-
-/finetune/minimal_version/output
-/finetune/minimal_version/output
-/finetune/training/output
+# Legacy directories left on disk after the modernization (kept locally, never tracked)
+/finetune/
 /sessions/
+/asr-classification/
+
+# Tooling / assistant session logs
+.claude-max/
