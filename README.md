@@ -8,7 +8,7 @@ driven by **Bayesian optimization (Optuna TPE + ASHA) on Ray Tune** and a
 *Zeitschrift für digitale Geisteswissenschaften*, ZfdG — see [Citation](#citation)).
 
 On the project's held-out oral-history test set, fine-tuning Whisper large-v3
-improves word error rate from **18.4 % to 13.3 %** without catastrophic
+improves word error rate from **18.6 % to 13.3 %** without catastrophic
 forgetting on out-of-distribution audio.
 
 > A qualitative baseline-vs-fine-tuned comparison is available
@@ -19,8 +19,7 @@ forgetting on out-of-distribution audio.
 ## What this project does
 
 - **PEFT fine-tuning** — LoRA with **DoRA** (`use_dora=True`) on the attention
-  query/key/value and output projections of Whisper. (PiSSA initialization
-  scaffolding is present but disabled by default.)
+  query/key/value and output projections of Whisper.
 - **Hyper-parameter optimization** — Ray Tune with an Optuna **TPE** sampler and
   the **ASHA** early-stopping scheduler; runs many trials in parallel across GPUs
   and nodes, with fault-tolerant resume.
@@ -35,7 +34,7 @@ forgetting on out-of-distribution audio.
   loss falls while WER rises (an overfitting signature).
 - **Standalone test-set evaluation** — `evaluation/evaluate.py` streams an HDF5
   test set, loads a fine-tuned adapter (or the pretrained baseline), and reports
-  WER, with resume and a `--max_eval_batches` smoke-test knob.
+  WER 
 
 ---
 
