@@ -1,0 +1,17 @@
+# Template for scripts/convert_jobs.toml (gitignored).
+# Usage:
+#   uv run --script scripts/convert_lora_to_faster_whisper.py --config scripts/convert_jobs.toml
+
+[[jobs]]
+adapter = "/path/to/peft/checkpoint"
+base = "openai/whisper-large-v3"
+output = "/path/to/large-v3_fw"
+# quantization = "float16"   # optional, defaults to float16
+
+[[jobs]]
+adapter = "/path/to/other/checkpoint"
+base = "nyrahealth/CrisperWhisper"
+output = "/path/to/crisper-whisper_fw"
+# CrisperWhisper requires this: the base repo has no tokenizer.json, and the
+# dynamically generated tokenizer would assign startoftranscript a wrong id.
+tokenizer_override = "nyrahealth/faster_CrisperWhisper"
