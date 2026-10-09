@@ -23,6 +23,9 @@ ray_results/
 slurm-*.out
 *.log
 
+# Local job list for the Faster-Whisper conversion (paths are machine-specific)
+scripts/convert_jobs.toml
+
 # The paper manuscript is distributed via the published article, not the repo
 docs/paper/*.docx
 

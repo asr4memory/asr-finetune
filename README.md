@@ -57,7 +57,8 @@ asr-finetune/
 │   ├── prepare_data/                # ★ materialize_dataset.py — HDF5 → Parquet features
 │   └── evaluation/                  # ★ evaluate.py, validate_model.py, compute_baseline_wer.py
 ├── configs/                         # .config files (configargparse) — train/ eval/ prepare/
-├── scripts/                         # standalone helpers (download_hf_model.py)
+├── scripts/                         # standalone helpers (download_hf_model.py,
+│                                    #   convert_lora_to_faster_whisper.py)
 ├── slurm/                           # runnable SLURM job templates (+ examples/ per cluster)
 └── docs/                            # MONITORING.md, HPC.md, design notes
 ```
@@ -191,7 +192,38 @@ version mismatches, and writes per-utterance results to `eval_final.json` /
 only. Use `configs/eval/<size>_baseline.config` (with `peft=False`) for the
 pretrained baseline.
 
-## 8. Monitoring & HPC
+## 8. Convert to Faster-Whisper
+
+To use a fine-tuned model for inference (e.g. in `asr-transcribe`), the PEFT
+adapter has to be merged into the base model and converted to the CTranslate2
+format that Faster-Whisper loads. Per job the script loads the base model, merges
+the adapter, saves the merged HF model to a temp dir and runs
+`ct2-transformers-converter` on it.
+
+The script declares its own dependencies (PEP 723), so `uv` runs it standalone —
+it needs neither `PYTHONPATH=src` nor the training environment:
+
+```bash
+# single job
+uv run --script scripts/convert_lora_to_faster_whisper.py \
+    --adapter <best-trial checkpoint/adapter dir> \
+    --base openai/whisper-large-v3 \
+    --output <target dir>_fw
+
+# several jobs at once
+cp scripts/convert_jobs.example.toml scripts/convert_jobs.toml  # then edit the paths
+uv run --script scripts/convert_lora_to_faster_whisper.py --config scripts/convert_jobs.toml
+```
+
+`scripts/convert_jobs.toml` is gitignored (the paths are machine-specific).
+Existing output directories are skipped unless `--force` is passed; quantization
+defaults to `float16`.
+
+For **CrisperWhisper** set `tokenizer_override = "nyrahealth/faster_CrisperWhisper"`
+in the job: its HF base repo ships no `tokenizer.json`, and the dynamically built
+fast tokenizer would assign `startoftranscript` the wrong id.
+
+## 9. Monitoring & HPC
 
 - **Monitoring** (TensorBoard + the Ray dashboard) — see [`docs/MONITORING.md`](docs/MONITORING.md).
 - **HPC / SLURM** — generic job templates live in `slurm/` (fill in the `<...>`
